@@ -30,8 +30,7 @@ SAVE_PATH = os.path.join(SCRIPT_DIR, 'data', 'output', 'debug_model.sav')
 
 # 模型参数配置
 MESH_RES = 10.0       # 网格尺寸 (米)
-TOP_OFFSET = 50.0     # 顶部偏移量 (米)
-BOT_OFFSET = 50.0     # 底部偏移量 (米)
+BOT_OFFSET = 50.0     # 底部偏移量 (米)，代表土层厚度
 
 def get_stl_bounds(stl_path):
     """
@@ -122,90 +121,109 @@ def run_debug_pipeline():
     safe_stl_path = STL_PATH.replace('\\', '/')
     it.command(f"geometry import '{safe_stl_path}' set 'terrain'")
     
-    # 3. 计算模型范围 (不再依赖 itasca.geometry)
+    # 3. 计算模型范围
     print("[Step 3] Calculating model bounds from STL file...")
     bounds = get_stl_bounds(STL_PATH)
     
     if bounds:
         x_min, x_max, y_min, y_max, z_min_topo, z_max_topo = bounds
         print(f"  Terrain Bounds: X[{x_min:.1f}, {x_max:.1f}], Y[{y_min:.1f}, {y_max:.1f}], Z[{z_min_topo:.1f}, {z_max_topo:.1f}]")
+        
+        # 稍微收缩一点点作为保险，确保网格面被 STL 完全覆盖
+        margin = MESH_RES * 0.05 
+        x_min_mesh = x_min + margin
+        x_max_mesh = x_max - margin
+        y_min_mesh = y_min + margin
+        y_max_mesh = y_max - margin
+        
+        print(f"  Mesh Bounds: X[{x_min_mesh:.1f}, {x_max_mesh:.1f}], Y[{y_min_mesh:.1f}, {y_max_mesh:.1f}]")
     else:
-        print("Warning: Failed to calculate bounds from STL. Using default values.")
-        x_min, x_max = 0.0, 100.0
-        y_min, y_max = 0.0, 100.0
-        z_min_topo, z_max_topo = 0.0, 50.0
+        print("Error: Failed to calculate bounds from STL.")
+        return
 
-    # 计算扩展后的模型范围
+    # 计算模型底面高程
     b_zmin = z_min_topo - BOT_OFFSET
-    b_zmax = z_max_topo + TOP_OFFSET
     
     # 计算网格数量
-    nx = max(1, int((x_max - x_min) / MESH_RES))
-    ny = max(1, int((y_max - y_min) / MESH_RES))
-    nz = max(1, int((b_zmax - b_zmin) / MESH_RES))
+    nx = max(1, int((x_max_mesh - x_min_mesh) / MESH_RES))
+    ny = max(1, int((y_max_mesh - y_min_mesh) / MESH_RES))
     
-    print(f"  Mesh Grid: {nx} x {ny} x {nz}")
+    # 4. 生成底部的“种子”网格 (Seed Layer)
+    print("[Step 4] Creating seed mesh layer...")
+    seed_height = min(1.0, MESH_RES / 10.0)
+    seed_z_top = b_zmin + seed_height
     
-    # 4. 生成初始网格 (Brick)
-    print("[Step 4] Creating base mesh...")
-    cmd_zone_create = (
-        f"zone create brick size {nx} {ny} {nz} "
-        f"point 0 ({x_min}, {y_min}, {b_zmin}) "
-        f"point 1 ({x_max}, {y_min}, {b_zmin}) "
-        f"point 2 ({x_min}, {y_max}, {b_zmin}) "
-        f"point 3 ({x_min}, {y_min}, {b_zmax})"
+    cmd_seed_mesh = (
+        f"zone create brick size {nx} {ny} 1 "
+        f"point 0 ({x_min_mesh}, {y_min_mesh}, {b_zmin}) "
+        f"point 1 ({x_max_mesh}, {y_min_mesh}, {b_zmin}) "
+        f"point 2 ({x_min_mesh}, {y_max_mesh}, {b_zmin}) "
+        f"point 3 ({x_min_mesh}, {y_min_mesh}, {seed_z_top})"
     )
-    print(f"  Command: {cmd_zone_create}")
-    it.command(cmd_zone_create)
+    print(f"  Command: {cmd_seed_mesh}")
+    it.command(cmd_seed_mesh)
     
-    # 5. 地形切割 (Generate from Topography)
-    print("[Step 5] Generating mesh from topography...")
-    it.command("zone generate from-topography geometry-set 'terrain'")
+    # 5. 地形挤出 (Extrude from Topography)
+    print("[Step 5] Extruding mesh from topography...")
+    
+    # 选定种子层的顶面
+    it.command(f"zone face group 'seed_top' range position-z {seed_z_top}")
+    
+    # 计算向上生长的层数 (基于平均高度)
+    avg_topo_z = (z_min_topo + z_max_topo) / 2.0
+    layers = max(1, int((avg_topo_z - seed_z_top) / MESH_RES))
+    
+    # 执行挤出
+    cmd_extrude = f"zone generate from-topography geometry-set 'terrain' range group 'seed_top' segments {layers}"
+    print(f"  Command: {cmd_extrude}")
+    it.command(cmd_extrude)
     
     # 6. 分组与材料赋参
     print("[Step 6] Assigning groups and properties...")
-    # 假设所有网格都是土体 (实际项目中可能需要更复杂的逻辑)
     it.command("zone group 'soil_layer'")
     it.command("zone cmodel assign mohr-coulomb")
     
-    # 设置示例材料参数 (Density, Young, Poisson, Cohesion, Friction, Tension)
-    # 请根据实际岩土参数修改
+    # 设置示例材料参数
     props = "density 2000 young 1e8 poisson 0.3 cohesion 20e3 friction 30 tension 0"
     it.command(f"zone property {props}")
     
     # 7. 边界条件
     print("[Step 7] Applying boundary conditions...")
-    # 底部固定 (z-velocity = 0)
-    it.command("zone face apply velocity-z 0 range position-z " + str(b_zmin))
-    # 四周约束法向位移 (简化处理：固定所有侧面的法向速度)
-    # 也可以使用 range plane ...
-    it.command(f"zone face apply velocity-x 0 range position-x {x_min}")
-    it.command(f"zone face apply velocity-x 0 range position-x {x_max}")
-    it.command(f"zone face apply velocity-y 0 range position-y {y_min}")
-    it.command(f"zone face apply velocity-y 0 range position-y {y_max}")
+    # 底部固定
+    it.command(f"zone face apply velocity-z 0 range position-z {b_zmin}")
+    # 四周约束法向位移
+    it.command(f"zone face apply velocity-x 0 range position-x {x_min_mesh}")
+    it.command(f"zone face apply velocity-x 0 range position-x {x_max_mesh}")
+    it.command(f"zone face apply velocity-y 0 range position-y {y_min_mesh}")
+    it.command(f"zone face apply velocity-y 0 range position-y {y_max_mesh}")
     
     # 8. 初始应力平衡 (Gravity)
     print("[Step 8] Solving for initial equilibrium (Elastic)...")
     it.command("model gravity 0 0 -9.81")
-    # 先把粘聚力设大，防止塑性破坏，计算弹性解
-    # 或者直接用 model solve elastic
-    # 这里演示标准的 solve elastic 流程
     it.command("model solve elastic ratio 1e-5")
     
     # 9. 归零位移
     print("[Step 9] Resetting displacements...")
     it.command("zone gridpoint initialize displacement (0,0,0)")
     it.command("zone gridpoint initialize velocity (0,0,0)")
-    it.command("model save '{0}_elastic.sav'".format(SAVE_PATH.replace('.sav', '')))
+    it.command("model save '{0}_balanced.sav'".format(SAVE_PATH.replace('.sav', '')))
 
-    # 10. (可选) 强度折减法计算安全系数
-    print("[Step 10] Ready for Factor of Safety (FOS) analysis...")
-    # it.command("model factor-of-safety") # 解除注释以运行 FOS 分析
+    # 10. 强度折减法计算安全系数 (Factor of Safety)
+    print("[Step 10] Calculating Factor of Safety (FOS)...")
+    it.command("model factor-of-safety ratio-local 1e-4")
     
-    # 保存最终状态
+    # 获取计算结果
+    try:
+        fos_val = it.fos.factor()
+        print(f"  [Result] Factor of Safety: {fos_val:.4f}")
+    except Exception as e:
+        print(f"  [Warning] Could not retrieve FOS value: {e}")
+
+    # 11. 保存最终状态 (包含 FOS 结果和剪切应变增量)
     safe_save_path = SAVE_PATH.replace('\\', '/')
     it.command(f"model save '{safe_save_path}'")
     print(f"=== Pipeline Completed. Model saved to {SAVE_PATH} ===")
+
 
 if __name__ == "__main__":
     try:
