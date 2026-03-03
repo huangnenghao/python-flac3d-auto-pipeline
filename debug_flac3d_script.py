@@ -29,8 +29,8 @@ STL_PATH = os.path.join(SCRIPT_DIR, 'data', 'output', 'terrain_surface.stl')
 SAVE_PATH = os.path.join(SCRIPT_DIR, 'data', 'output', 'debug_model.sav')
 
 # 模型参数配置
-MESH_RES = 10.0       # 网格尺寸 (米)
-BOT_OFFSET = 50.0     # 底部偏移量 (米)，代表土层厚度
+MESH_RES = 1.0       # 网格尺寸 (米)
+BOT_OFFSET = 10.0     # 底部偏移量 (米)，代表土层厚度
 
 def get_stl_bounds(stl_path):
     """

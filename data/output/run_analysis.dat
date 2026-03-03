@@ -1,0 +1,33 @@
+; Auto-generated FLAC3D Analysis Script by GeoMeshAuto
+model new
+model large-strain off
+; --- Geometry Import ---
+geometry import 'd:/2026.03 FLAC3D Code-Native/data/output/terrain_surface.stl' set 'terrain'
+; --- Seed Mesh Generation ---
+zone create brick size 4 3 1 point 0 (-21.000000019033905, -15.499999759253114, -56.29215355560274) point 1 (20.999999980966095, -15.499999759253114, -56.29215355560274) point 2 (-21.000000019033905, 15.500000240746886, -56.29215355560274) point 3 (-21.000000019033905, -15.499999759253114, -55.29215355560274)
+; --- Extrude from Topography ---
+zone face group 'seed_top' range position-z -55.29215355560274
+zone generate from-topography geometry-set 'terrain' range group 'seed_top' segments 5
+; --- Grouping & Properties ---
+zone group 'soil_layer'
+zone cmodel assign mohr-coulomb
+zone property density 2000.0 young 100000000.0 poisson 0.3 cohesion 20000.0 friction 30.0 tension 0.0
+; --- Boundary Conditions ---
+zone face apply velocity-z 0 range position-z -56.29215355560274
+zone face apply velocity-x 0 range position-x -21.000000019033905
+zone face apply velocity-x 0 range position-x 20.999999980966095
+zone face apply velocity-y 0 range position-y -15.499999759253114
+zone face apply velocity-y 0 range position-y 15.500000240746886
+; --- Initial Equilibrium (Elastic) ---
+model gravity 0 0 -9.81
+model solve elastic ratio 1e-05
+; --- Reset & Save Balanced State ---
+zone gridpoint initialize displacement (0,0,0)
+zone gridpoint initialize velocity (0,0,0)
+model save 'd:/2026.03 FLAC3D Code-Native/data/output/model_final_balanced.sav'
+; --- Factor of Safety Calculation ---
+model factor-of-safety ratio-local 0.0001
+; --- Save Final Result ---
+model save 'd:/2026.03 FLAC3D Code-Native/data/output/model_final.sav'
+model title 'GeoMeshAuto Final Result'
+; quit

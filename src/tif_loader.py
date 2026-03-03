@@ -133,10 +133,6 @@ class TifLoader:
             # 初始全 False
             update_mask = np.zeros_like(nan_mask)
             
-            # 累加器，用于计算平均值
-            neighbor_sum = np.zeros_like(filled_data, dtype=np.float32)
-            neighbor_count = np.zeros_like(filled_data, dtype=np.float32)
-            
             # 检查四个方向
             # Shift Valid Data into NaN holes
             

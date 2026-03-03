@@ -158,10 +158,6 @@ class SurfaceBuilder:
         # 这里我们将几何中心置于 (0,0)，但 Z 轴保留相对高程
         # 为了方便 FLAC3D 建模，通常将 Z_min 对齐到 0 或者保留原始高程
         # 这里不做 Z 轴的额外平移，只做 XY 居中和旋转
-        
-        # 如果需要将 Zmin 对齐到 0：
-        # z_min = np.min(mesh.vertices[:, 2])
-        # mesh.vertices[:, 2] -= z_min
 
     def export_stl(self, filepath):
         if self.mesh is None:

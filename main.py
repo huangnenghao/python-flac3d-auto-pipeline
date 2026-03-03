@@ -4,7 +4,7 @@ import numpy as np
 import config
 from src.tif_loader import TifLoader
 from src.surface_builder import SurfaceBuilder
-from src.flac3d_mesher import Flac3DMesher
+from src.flac3d_runner import Flac3DRunner
 
 def main():
     print("=== GeoMeshAuto: TIF to FLAC3D Pipeline ===")
@@ -62,10 +62,17 @@ def main():
         builder.export_stl(output_stl_path)
         
         # 计算包围盒，供下一步使用
+        # 【重要修正】必须使用变换后的 Mesh bounds，而不是原始数据的 x,y,z
+        # 原始数据未经过 PCA 旋转和居中，坐标与最终导出的 STL 不一致
+        if builder.mesh is None:
+             raise ValueError("Mesh generation failed, builder.mesh is None")
+             
+        mesh_bounds = builder.mesh.bounds
+        # mesh.bounds 返回 [[xmin, ymin, zmin], [xmax, ymax, zmax]]
         bounds = (
-            np.min(x), np.max(x),
-            np.min(y), np.max(y),
-            np.min(z), np.max(z)
+            mesh_bounds[0][0], mesh_bounds[1][0], # xmin, xmax
+            mesh_bounds[0][1], mesh_bounds[1][1], # ymin, ymax
+            mesh_bounds[0][2], mesh_bounds[1][2]  # zmin, zmax
         )
         print(f"  [Success] STL generated at: {output_stl_path}")
         print(f"  Terrain Bounds: X[{bounds[0]:.1f}, {bounds[1]:.1f}], Y[{bounds[2]:.1f}, {bounds[3]:.1f}], Z[{bounds[4]:.1f}, {bounds[5]:.1f}]")
@@ -76,16 +83,16 @@ def main():
         return # 第二步失败直接退出
 
     # ==========================================
-    # STEP 3: FLAC3D 网格划分 (外部控制台调用)
+    # STEP 3: FLAC3D 分析计算 (外部控制台调用)
     # ==========================================
-    print("\n>>> STEP 3: FLAC3D Meshing (Console Mode)...")
+    print("\n>>> STEP 3: FLAC3D Analysis (Console Mode)...")
     try:
-        mesher = Flac3DMesher()
-        # 直接调用 run_meshing_sequence，内部会处理脚本生成和 EXE 调用
-        success = mesher.run_meshing_sequence(output_stl_path, output_model_path, bounds, config)
+        runner = Flac3DRunner()
+        # 直接调用 run_analysis_sequence，内部会处理脚本生成和 EXE 调用
+        success = runner.run_analysis_sequence(output_stl_path, output_model_path, bounds, config)
         
         if success:
-             print("  [Success] FLAC3D process finished successfully.")
+             print("  [Success] FLAC3D analysis finished successfully.")
              print(f"  Model saved to: {output_model_path}")
         else:
              print("  [Warning] FLAC3D process encountered an issue.")
