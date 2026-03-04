@@ -1,38 +1,84 @@
 import os
 import sys
+import shutil
 import numpy as np
 import config
+import tkinter as tk
+from tkinter import filedialog
 from src.tif_loader import TifLoader
 from src.surface_builder import SurfaceBuilder
 from src.flac3d_runner import Flac3DRunner
 
+def select_tif_file():
+    """弹出文件选择对话框选择 TIF 文件"""
+    root = tk.Tk()
+    root.withdraw() # 隐藏主窗口
+    file_path = filedialog.askopenfilename(
+        title="Select GeoTIFF File",
+        filetypes=[("GeoTIFF files", "*.tif *.tiff"), ("All files", "*.*")]
+    )
+    return file_path
+
 def main():
     print("=== GeoMeshAuto: TIF to FLAC3D Pipeline ===")
     
-    # ==========================================
-    # STEP 0: 环境与路径检查
-    # ==========================================
-    # 查找 input 目录下所有的 tif 文件
-    tif_files = [f for f in os.listdir(config.INPUT_DIR) if f.lower().endswith(('.tif', '.tiff'))]
+    # 1. 询问是否选择新文件
+    print("Please select a GeoTIFF file to start analysis...")
+    selected_tif_path = select_tif_file()
     
-    if not tif_files:
-        print(f"[Error] No .tif files found in {config.INPUT_DIR}")
-        print("Please place your GeoTIFF file in the 'data/input' folder.")
-        print("Or run 'python test_data_gen.py' to generate a dummy TIF for testing.")
+    if not selected_tif_path:
+        print("[Info] No file selected. Exiting...")
         return
 
-    # 默认取第一个 TIF 文件
-    input_tif_name = tif_files[0]
-    input_tif_path = os.path.join(config.INPUT_DIR, input_tif_name)
-    output_stl_path = os.path.join(config.OUTPUT_DIR, config.STL_FILENAME)
-    output_model_path = os.path.join(config.OUTPUT_DIR, 'model_final.sav')
+    # 2. 获取项目名称
+    # 如果用户没有输入项目名称，则默认使用文件名（不含扩展名）
+    default_project_name = os.path.splitext(os.path.basename(selected_tif_path))[0]
     
-    # 确保输出目录存在
-    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    project_name = input(f"Enter project name (default: {default_project_name}): ").strip()
+    if not project_name:
+        project_name = default_project_name
     
-    # 定义全局变量以便后续步骤使用
-    x, y, z = None, None, None
-    bounds = None
+    # 更新配置中的路径
+    dirs = config.get_project_dirs(project_name)
+    input_dir = dirs['input']
+    output_dir = dirs['output']
+    
+    print(f"Current Project: {project_name}")
+    print(f"Input Directory: {input_dir}")
+    print(f"Output Directory: {output_dir}")
+
+    # ==========================================
+    # STEP 0: 环境与路径检查 & 文件准备
+    # ==========================================
+    
+    # 确保目录存在
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 将选中的 TIF 文件复制到项目的 input 目录
+    tif_filename = os.path.basename(selected_tif_path)
+    target_tif_path = os.path.join(input_dir, tif_filename)
+    
+    # 如果目标文件不存在，或者与源文件不同，则复制
+    if os.path.abspath(selected_tif_path) != os.path.abspath(target_tif_path):
+        print(f"Copying TIF file to project input directory...")
+        try:
+            shutil.copy2(selected_tif_path, target_tif_path)
+            print(f"  [Success] Copied to: {target_tif_path}")
+        except Exception as e:
+            print(f"  [Error] Failed to copy file: {e}")
+            return
+    else:
+        print(f"  [Info] File already exists in input directory.")
+
+    # 设置 input_tif_path 为项目目录下的文件
+    input_tif_path = target_tif_path
+    output_stl_path = os.path.join(output_dir, config.STL_FILENAME)
+    
+    # 传递 output_dir 给 config (或者直接修改 config 对象，但这里我们尽量不修改全局 config)
+    # 为了让 flac3d_runner 知道新的 output_dir，我们需要一种方式传递
+    # 最简单的是临时修改 config.OUTPUT_DIR
+    config.OUTPUT_DIR = output_dir # Hack: 更新全局配置以便后续模块使用
 
     # ==========================================
     # STEP 1: TIF 数据加载与处理 (解耦)
@@ -89,11 +135,11 @@ def main():
     try:
         runner = Flac3DRunner()
         # 直接调用 run_analysis_sequence，内部会处理脚本生成和 EXE 调用
-        success = runner.run_analysis_sequence(output_stl_path, output_model_path, bounds, config)
+        # model_final.sav 路径不再作为参数传递，或传 None
+        success = runner.run_analysis_sequence(output_stl_path, None, bounds, config)
         
         if success:
              print("  [Success] FLAC3D analysis finished successfully.")
-             print(f"  Model saved to: {output_model_path}")
         else:
              print("  [Warning] FLAC3D process encountered an issue.")
              

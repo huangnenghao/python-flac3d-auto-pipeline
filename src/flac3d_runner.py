@@ -11,17 +11,26 @@ class Flac3DRunner:
         """
         生成 FLAC3D 脚本并调用控制台程序执行全套分析流程
         :param stl_path: 地形 STL 文件绝对路径
-        :param save_path: 最终模型保存路径
+        :param save_path: 最终模型保存路径 (可以为 None，如果不依赖此路径保存)
         :param bounds: (xmin, xmax, ymin, ymax, zmin, zmax) 地形包围盒
         :param config: 配置对象
         """
         xmin, xmax, ymin, ymax, z_min_topo, z_max_topo = bounds
         
+        # 确保输出目录从 config 获取 (或者从 stl_path 推断，这里假设 config.OUTPUT_DIR 已被 main 更新)
+        output_dir = getattr(config, 'OUTPUT_DIR', os.path.dirname(stl_path))
+
         print(f"[Flac3DRunner] Preparing FLAC3D analysis script...")
         
         # 1. 准备路径和参数
         safe_stl_path = stl_path.replace('\\', '/')
-        safe_save_path = save_path.replace('\\', '/')
+        
+        # 如果 save_path 为 None，我们仍然需要一个路径前缀来生成 _balanced.sav
+        # 默认使用 output_dir 下的 model.sav 作为基准
+        if save_path:
+            safe_save_path_base = save_path.replace('\\', '/')
+        else:
+            safe_save_path_base = os.path.join(output_dir, 'model.sav').replace('\\', '/')
         
         # 网格参数
         res_x = getattr(config, 'MESH_RES_X', 10.0)
@@ -96,23 +105,25 @@ class Flac3DRunner:
             f"model gravity 0 0 {config.GRAVITY_Z}",
             f"model solve elastic ratio {config.SOLVE_ELASTIC_RATIO}",
             
-            f"; --- Reset & Save Balanced State ---",
+            f"; --- Save Balanced State ---",
+            f"model save '{safe_save_path_base.replace('model.sav', 'model_balanced.sav').replace('model_final.sav', 'model_balanced.sav')}'",
+
+            f"; --- Reset State ---",
             f"zone gridpoint initialize displacement (0,0,0)",
             f"zone gridpoint initialize velocity (0,0,0)",
-            f"model save '{safe_save_path.replace('.sav', '_balanced.sav')}'",
             
             f"; --- Factor of Safety Calculation ---",
             f"model factor-of-safety ratio-local {config.SOLVE_FOS_RATIO}",
             
-            f"; --- Save Final Result ---",
-            f"model save '{safe_save_path}'",
+            f"; --- Final Result ---",
+            # f"model save '{safe_save_path}'", # 不需要再保存 model_final.sav
             f"model title 'GeoMeshAuto Final Result'",
             
             f"; quit" # 退出
         ]
         
         # 3. 写入 .dat 脚本文件
-        script_path = os.path.join(config.OUTPUT_DIR, 'run_analysis.dat')
+        script_path = os.path.join(output_dir, 'run_analysis.dat')
         with open(script_path, 'w') as f:
             f.write('\n'.join(cmds))
         
@@ -133,7 +144,7 @@ class Flac3DRunner:
             
             process = subprocess.Popen(
                 [exe_path, script_path],
-                cwd=config.OUTPUT_DIR,
+                cwd=output_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

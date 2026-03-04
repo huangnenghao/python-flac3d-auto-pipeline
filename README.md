@@ -74,25 +74,30 @@ MAT_FRICTION = 30.0
 python main.py
 ```
 
+程序启动后，会弹出文件选择框，请选择您的 GeoTIFF 文件。随后程序会询问项目名称（默认为文件名），确认后将自动创建文件夹并开始计算。
+
 ### 4. 查看结果
-程序运行完成后，结果将保存在 `data/output/` 目录：
+程序运行完成后，结果将保存在 `data/<Project_Name>/output/` 目录：
 *   `terrain_surface.stl`: 生成的地形 STL 模型。
 *   `run_analysis.dat`: 自动生成的 FLAC3D 分析脚本。
-*   `model_final.sav`: 包含最终 FOS 计算结果的 FLAC3D 模型文件。
-*   `*_balanced.sav`: 初始平衡后的中间状态模型。
+*   `model_balanced.sav`: 初始平衡后的中间状态模型。
+*   FOS-Init.sav、FOS-Stable.sav、FOS-Unstable.sav ：包含最终 FOS 计算结果的 FLAC3D 模型文件。: 包含最终 FOS 计算结果的 FLAC3D 模型文件（由 FLAC3D 自动生成）。
 
 ## 📂 项目结构
 
 ```
 d:\2026.03 FLAC3D Code-Native\
 ├── config.py                 # 全局配置文件 (路径、网格、材料参数)
-├── main.py                   # 主程序入口
+├── main.py                   # 主程序入口 (包含 GUI 文件选择)
 ├── requirements.txt          # Python 依赖列表
 ├── debug_flac3d_script.py    # 用于在 FLAC3D GUI 中手动调试的脚本
+├── raw_tif_to_stl.py         # 原始数据转换脚本 (用于效果对比)
 ├── test_data_gen.py          # 测试数据生成器
 ├── data/
-│   ├── input/                # 存放 .tif 输入文件
-│   └── output/               # 存放生成的 STL、脚本和计算结果
+│   ├── <Project_Name>/       # 自动生成的项目文件夹
+│   │   ├── input/            # 存放 .tif 输入文件 (自动复制)
+│   │   └── output/           # 存放生成的 STL、脚本和计算结果
+│   └── ...
 └── src/
     ├── tif_loader.py         # TIF 数据加载与预处理 (Erosion, Extrapolation)
     ├── surface_builder.py    # STL 生成与几何变换 (PCA Alignment)

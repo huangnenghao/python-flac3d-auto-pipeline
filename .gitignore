@@ -3,3 +3,14 @@ data/output/FOS-Stable.sav
 data/output/FOS-Unstable.sav
 data/output/model_final_balanced.sav
 data/output/model_final.sav
+data/longrong1/input/terrain.tif
+data/longrong1/output/FOS-Init.sav
+data/longrong1/output/FOS-Stable.sav
+data/longrong1/output/FOS-Unstable.sav
+data/longrong1/output/model_balanced.sav
+data/longrong1/output/run_analysis.dat
+data/longrong1/output/terrain_surface.stl
+data/output/flac3d_log.txt
+data/output/raw_terrain_no_process.stl
+data/output/run_analysis.dat
+data/output/terrain_surface.stl

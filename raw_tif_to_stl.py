@@ -89,22 +89,32 @@ def raw_build_stl(x, y, z, output_path):
 if __name__ == "__main__":
     print("=== Raw TIF to STL Converter (No Preprocessing) ===")
     
+    # 获取项目名称
+    project_name = input(f"Enter project name (default: {config.PROJECT_NAME}): ").strip()
+    if not project_name:
+        project_name = config.PROJECT_NAME
+    
+    # 获取路径
+    dirs = config.get_project_dirs(project_name)
+    input_dir = dirs['input']
+    output_dir = dirs['output']
+    
     # Find input TIF
-    if not os.path.exists(config.INPUT_DIR):
-        print(f"Input directory not found: {config.INPUT_DIR}")
+    if not os.path.exists(input_dir):
+        print(f"Input directory not found: {input_dir}")
         exit()
         
-    tif_files = [f for f in os.listdir(config.INPUT_DIR) if f.lower().endswith(('.tif', '.tiff'))]
+    tif_files = [f for f in os.listdir(input_dir) if f.lower().endswith(('.tif', '.tiff'))]
     if not tif_files:
-        print(f"No .tif files found in {config.INPUT_DIR}")
+        print(f"No .tif files found in {input_dir}")
         exit()
         
-    input_path = os.path.join(config.INPUT_DIR, tif_files[0])
+    input_path = os.path.join(input_dir, tif_files[0])
     # Save to a distinct filename for comparison
-    output_path = os.path.join(config.OUTPUT_DIR, "raw_terrain_no_process.stl")
+    output_path = os.path.join(output_dir, "raw_terrain_no_process.stl")
     
     # Ensure output dir exists
-    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
     # Run conversion
     x, y, z = raw_load_tif(input_path, downsample_factor=config.DOWNSAMPLE_FACTOR)

@@ -1,7 +1,0 @@
-flac3d>model deterministic on
-flac3d>model precision 6
-flac3d>model random 10000
-flac3d>program call 'd:\2026.03????????????\data\output\run_meshing.dat'
-*** Error opening D:/2026.03????????????/data/output/run_meshing.dat. ϵͳ�Ҳ���ָ����·����.
-    While processing line 1 of source Command Line.
-flac3d>
