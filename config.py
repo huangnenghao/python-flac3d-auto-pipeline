@@ -18,10 +18,10 @@ Z_SCALE = 1.0          # 高程缩放
 STL_FILENAME = 'terrain_surface.stl'
 
 # FLAC3D 网格配置
-MESH_RES_X = 10.0      # FLAC3D 初始网格 X 方向尺寸
-MESH_RES_Y = 10.0      # FLAC3D 初始网格 Y 方向尺寸
-MESH_RES_Z = 10.0      # FLAC3D 初始网格 Z 方向尺寸
-MODEL_BOT_OFFSET = 50.0 # 初始大六面体底部低于地形最低点的距离
+MESH_RES_X = 0.5     # FLAC3D 初始网格 X 方向尺寸
+MESH_RES_Y = 0.5      # FLAC3D 初始网格 Y 方向尺寸
+MESH_RES_Z = 1.0      # FLAC3D 初始网格 Z 方向尺寸
+MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离
 
 # FLAC3D 材料参数 (Mohr-Coulomb)
 MAT_DENSITY = 2000.0   # kg/m^3

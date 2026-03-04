@@ -15,7 +15,7 @@ import itasca as it
 import os
 import sys
 import struct
-
+it.command("python-reset-state false")
 # 设置工作目录为当前脚本所在目录
 # 如果直接在 FLAC3D 中打开，__file__ 可能不可用，此时需手动设置 PROJECT_DIR
 try:
