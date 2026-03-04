@@ -141,13 +141,39 @@ class Flac3DRunner:
             )
             
             # 实时读取输出
+            last_operation = None
+            
             while True:
                 line = process.stdout.readline()
                 if not line and process.poll() is not None:
                     break
                 if line:
-                    sys.stdout.write(f"    [F3D] {line}")
-                    sys.stdout.flush()
+                    # 简化 FOS 输出逻辑
+                    stripped_line = line.strip()
+                    
+                    # 检查是否是 FOS 计算过程的行 (包含 Bracketing 或 Perturbation)
+                    is_fos_line = "Bracketing-" in stripped_line or "Perturbation-" in stripped_line
+                    
+                    if is_fos_line:
+                        # 尝试提取 Operation 名称
+                        parts = stripped_line.split()
+                        if len(parts) > 0:
+                            current_operation = parts[0]
+                            # 只有当 Operation 改变时才输出
+                            if current_operation != last_operation:
+                                sys.stdout.write(f"    [F3D] FOS Progress: {current_operation}...\n")
+                                sys.stdout.flush()
+                                last_operation = current_operation
+                    else:
+                        # 过滤掉 FOS 的表头行 (A Operation Step Ratio-loca ...)
+                        if "Operation" in stripped_line and "Step" in stripped_line and "Ratio-loca" in stripped_line:
+                            continue
+                        if "----------" in stripped_line:
+                            continue
+                            
+                        # 非 FOS 步骤，正常输出
+                        sys.stdout.write(f"    [F3D] {line}")
+                        sys.stdout.flush()
 
             return_code = process.poll()
             elapsed = time.time() - start_time
