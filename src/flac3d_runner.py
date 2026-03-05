@@ -63,15 +63,19 @@ class Flac3DRunner:
         avg_topo_z = (z_min_topo + z_max_topo) / 2.0
         layers = max(1, int((avg_topo_z - seed_z_top) / res_z))
 
-        # 材料参数
-        mat_props = (
-            f"density {config.MAT_DENSITY} "
-            f"young {config.MAT_YOUNG} "
-            f"poisson {config.MAT_POISSON} "
-            f"cohesion {config.MAT_COHESION} "
-            f"friction {config.MAT_FRICTION} "
-            f"tension {config.MAT_TENSION}"
-        )
+        # 材料参数 (Note: Only used for single-layer fallback, which is deprecated but kept for safety)
+        # We construct a default prop string just in case, but usually we use LAYERS
+        try:
+            mat_props = (
+                f"density {getattr(config, 'MAT_DENSITY', 2000.0)} "
+                f"young {getattr(config, 'MAT_YOUNG', 1e8)} "
+                f"poisson {getattr(config, 'MAT_POISSON', 0.3)} "
+                f"cohesion {getattr(config, 'MAT_COHESION', 20e3)} "
+                f"friction {getattr(config, 'MAT_FRICTION', 30.0)} "
+                f"tension {getattr(config, 'MAT_TENSION', 0.0)}"
+            )
+        except AttributeError:
+             mat_props = "" # Should not happen with getattr default, but safe fallback
 
         # 2. 构建 FLAC3D 命令序列
         cmds = [
@@ -89,11 +93,82 @@ class Flac3DRunner:
             f"zone face group 'seed_top' range position-z {seed_z_top}",
             f"zone generate from-topography geometry-set 'terrain' range group 'seed_top' segments {layers}",
             
-            f"; --- Grouping & Properties ---",
-            f"zone group 'soil_layer'",
+            f"; --- Grouping & Properties (Multi-Layer) ---",
             f"zone cmodel assign mohr-coulomb",
-            f"zone property {mat_props}",
+        ]
+
+        # 动态生成地层分组和属性赋值命令
+        # 我们使用 range geometry-distance 来实现
+        # 逻辑：
+        # 1. 默认所有单元为最后一层 (bedrock)
+        # 2. 然后从倒数第二层开始向上遍历，覆盖之前的设置
+        #    例如：先设 bedrock, 然后设 weathered (dist <= 15), 然后设 top_soil (dist <= 5)
+        #    这样 dist <= 5 的区域会被 top_soil 覆盖，dist <= 15 但 > 5 的区域保留为 weathered
+        
+        # 获取地层配置
+        layers_config = getattr(config, 'LAYERS', [])
+        
+        # 如果没有配置 layers，回退到默认单层逻辑 (为了兼容性)
+        if not layers_config:
+            # 构造一个默认层
+            default_props = (
+                f"density {config.MAT_DENSITY} "
+                f"young {config.MAT_YOUNG} "
+                f"poisson {config.MAT_POISSON} "
+                f"cohesion {config.MAT_COHESION} "
+                f"friction {config.MAT_FRICTION} "
+                f"tension {config.MAT_TENSION}"
+            )
+            cmds.append(f"zone group 'soil_layer' slot 'layers'")
+            cmds.append(f"zone property {default_props}")
+        else:
+            # 1. 首先，将所有单元分配给最后一层 (通常是基岩)
+            base_layer = layers_config[-1]
+            base_name = base_layer['name']
             
+            cmds.append(f"; Initialize all zones to base layer: {base_name}")
+            cmds.append(f"zone group '{base_name}' slot 'layers'")
+            
+            # 2. 从下往上倒序遍历（除了最后一层），利用 geometry-distance 覆盖
+            # 注意：config 中是 [top, middle, bottom]，我们需要反过来处理
+            # 假设: top (0-2m), middle (2-7m).
+            # range geometry-distance gap 7 -> 选中 0-7m 的范围
+            # range geometry-distance gap 2 -> 选中 0-2m 的范围
+            # 所以，如果我们先应用 gap 7 (middle)，再应用 gap 2 (top)，那么 0-2m 的会被 top 覆盖，2-7m 的保留 middle。
+            
+            acc_thickness = 0.0
+            layer_depths = []
+            for layer in layers_config[:-1]:
+                if layer['thickness'] is not None:
+                    acc_thickness += layer['thickness']
+                    layer_depths.append((layer, acc_thickness))
+            
+            # 倒序遍历 (先处理深的，再处理浅的)
+            for layer, depth in reversed(layer_depths):
+                layer_name = layer['name']
+                cmds.append(f"; Assign layer: {layer_name} (Depth <= {depth}m)")
+                # 修正：geometry-distance 不需要 'set' 关键字，直接跟集合名称
+                # 语法: range geometry-distance 'terrain' gap {depth}
+                cmds.append(f"zone group '{layer_name}' slot 'layers' range geometry-distance 'terrain' gap {depth}")
+
+            # 3. 循环赋值材料参数
+            cmds.append(f"; Assign Material Properties")
+            for layer in layers_config:
+                l_name = layer['name']
+                props = layer['mat_props']
+                # 注意：此处使用字典 key 获取参数
+                prop_str = (
+                    f"density {props['density']} "
+                    f"young {props['young']} "
+                    f"poisson {props['poisson']} "
+                    f"cohesion {props['cohesion']} "
+                    f"friction {props['friction']} "
+                    f"tension {props['tension']}"
+                )
+                cmds.append(f"zone property {prop_str} range group '{l_name}'")
+
+        # 继续添加剩余命令
+        cmds.extend([
             f"; --- Boundary Conditions ---",
             f"zone face apply velocity-z 0 range position-z {b_zmin}",
             f"zone face apply velocity-x 0 range position-x {x_min_mesh}",
@@ -120,7 +195,7 @@ class Flac3DRunner:
             f"model title 'GeoMeshAuto Final Result'",
             
             f"; quit" # 退出
-        ]
+        ])
         
         # 3. 写入 .dat 脚本文件
         script_path = os.path.join(output_dir, 'run_analysis.dat')

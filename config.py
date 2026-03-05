@@ -30,15 +30,37 @@ STL_FILENAME = 'terrain_surface.stl'
 MESH_RES_X = 5     # FLAC3D 初始网格 X 方向尺寸
 MESH_RES_Y = 5      # FLAC3D 初始网格 Y 方向尺寸
 MESH_RES_Z = 5      # FLAC3D 初始网格 Z 方向尺寸
-MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离
+MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离 (建议足够深以容纳所有地层)
 
-# FLAC3D 材料参数 (Mohr-Coulomb)
-MAT_DENSITY = 2000.0   # kg/m^3
-MAT_YOUNG = 1e8        # Pa
-MAT_POISSON = 0.3
-MAT_COHESION = 20e3    # Pa
-MAT_FRICTION = 30.0    # degrees
-MAT_TENSION = 0.0      # Pa
+# 地层结构定义 (从上往下)
+# thickness: 层厚度 (米)，最后一层可以使用 None 表示延伸到底部
+# mat_props: 该层的材料参数
+LAYERS = [
+    {
+        "name": "top_soil", 
+        "thickness": 2.0,  
+        "mat_props": {
+            "density": 1800.0, "young": 5e7, "poisson": 0.35, 
+            "cohesion": 10e3, "friction": 25.0, "tension": 0.0
+        }
+    },
+    {
+        "name": "weathered_rock", 
+        "thickness": 5.0, 
+        "mat_props": {
+            "density": 2200.0, "young": 2e8, "poisson": 0.25, 
+            "cohesion": 50e3, "friction": 35.0, "tension": 1e4
+        }
+    },
+    {
+        "name": "bedrock",   
+        "thickness": None, # 剩余部分全部为基岩
+        "mat_props": {
+            "density": 2500.0, "young": 1e9, "poisson": 0.2, 
+            "cohesion": 200e3, "friction": 45.0, "tension": 1e5
+        }
+    }
+]
 
 # FLAC3D 求解参数
 GRAVITY_Z = -9.81      # m/s^2

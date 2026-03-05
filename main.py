@@ -2,7 +2,7 @@ import os
 import sys
 import shutil
 import numpy as np
-import config
+import config  
 import tkinter as tk
 from tkinter import filedialog
 from src.tif_loader import TifLoader
