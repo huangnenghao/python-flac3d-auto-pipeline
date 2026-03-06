@@ -1,0 +1,3 @@
+; Auto-generated Reliability Analysis Script
+program call 'd:/2026.03 FLAC3D Code-Native/data/test/output/rf_monte_carlo.py'
+program quit

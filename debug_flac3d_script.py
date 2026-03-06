@@ -1,5 +1,5 @@
 # ==========================================
-# GeoMeshAuto: FLAC3D Debug Script
+# SlopeRA3D: FLAC3D Debug Script
 # 
 # 这是一个专用于在 FLAC3D 软件内部运行的调试脚本。
 # 使用方法：

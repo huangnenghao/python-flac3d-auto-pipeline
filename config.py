@@ -33,31 +33,45 @@ MESH_RES_Z = 5      # FLAC3D 初始网格 Z 方向尺寸
 MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离 (建议足够深以容纳所有地层)
 
 # 地层结构定义 (从上往下)
-# thickness: 层厚度 (米)，最后一层可以使用 None 表示延伸到底部
-# mat_props: 该层的材料参数
+# thickness : 层厚度 (米)，最后一层可以使用 None 表示延伸到底部
+# mat_props : 该层的确定性材料参数
+# 随机场参数 (仅在 RF_ENABLED=True 时生效):
+#   c_cov    : 粘聚力变异系数 (COV)
+#   phi_cov  : 摩擦角变异系数 (COV)
+#   scale_h  : 水平相关长度 (m)
+#   scale_v  : 垂直相关长度 (m)
 LAYERS = [
     {
-        "name": "top_soil", 
-        "thickness": 2.0,  
+        "name": "top_soil",
+        "thickness": 2.0,
         "mat_props": {
-            "density": 1800.0, "young": 5e7, "poisson": 0.35, 
-            "cohesion": 10e3, "friction": 25.0, "tension": 0.0
+            "density": 1800.0, "young": 5e7, "poisson": 0.35,
+            "cohesion": 10e3, "friction": 25.0, "tension": 0.0,
+            # 随机场参数
+            "c_cov": 0.30, "phi_cov": 0.20,
+            "scale_h": 15.0, "scale_v": 1.5,
         }
     },
     {
-        "name": "weathered_rock", 
-        "thickness": 5.0, 
+        "name": "weathered_rock",
+        "thickness": 5.0,
         "mat_props": {
-            "density": 2200.0, "young": 2e8, "poisson": 0.25, 
-            "cohesion": 50e3, "friction": 35.0, "tension": 1e4
+            "density": 2200.0, "young": 2e8, "poisson": 0.25,
+            "cohesion": 50e3, "friction": 35.0, "tension": 1e4,
+            # 随机场参数
+            "c_cov": 0.25, "phi_cov": 0.15,
+            "scale_h": 20.0, "scale_v": 2.0,
         }
     },
     {
-        "name": "bedrock",   
-        "thickness": None, # 剩余部分全部为基岩
+        "name": "bedrock",
+        "thickness": None,  # 剩余部分全部为基岩
         "mat_props": {
-            "density": 2500.0, "young": 1e9, "poisson": 0.2, 
-            "cohesion": 200e3, "friction": 45.0, "tension": 1e5
+            "density": 2500.0, "young": 1e9, "poisson": 0.2,
+            "cohesion": 200e3, "friction": 45.0, "tension": 1e5,
+            # 随机场参数
+            "c_cov": 0.15, "phi_cov": 0.10,
+            "scale_h": 40.0, "scale_v": 5.0,
         }
     }
 ]
@@ -66,3 +80,16 @@ LAYERS = [
 GRAVITY_Z = -9.81      # m/s^2
 SOLVE_ELASTIC_RATIO = 1e-5
 SOLVE_FOS_RATIO = 1e-4
+
+# ============================================================
+# 随机场 & 可靠度分析参数 (Monte Carlo)
+# ============================================================
+RF_ENABLED = True      # 是否在 FOS 计算后自动执行可靠度分析
+RF_NSIM    = 10       # Monte Carlo 模拟次数
+RF_ACF     = 1         # 自相关函数类型:
+                       #   1 = 单指数 (Single Exponential)
+                       #   2 = 平方指数/高斯 (Squared Exponential)
+                       #   3 = 余弦指数 (Cosine Exponential)
+                       #   4 = 二阶马尔可夫 (Second-Order Markov)
+                       #   5 = 线性/三角形 (Linear/Triangular)
+RF_RXY     = -0.5      # c 与 phi 之间的互相关系数 (负值表示负相关)

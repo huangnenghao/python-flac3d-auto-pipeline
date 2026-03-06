@@ -2,12 +2,14 @@ import os
 import subprocess
 import time
 import sys
+import csv
+import numpy as np
 
 class Flac3DRunner:
     def __init__(self):
         self.script_lines = []
 
-    def run_analysis_sequence(self, stl_path, save_path, bounds, config):
+    def run_analysis_sequence(self, stl_path, save_path, bounds, config, run_fos=True):
         """
         生成 FLAC3D 脚本并调用控制台程序执行全套分析流程
         :param stl_path: 地形 STL 文件绝对路径
@@ -79,7 +81,7 @@ class Flac3DRunner:
 
         # 2. 构建 FLAC3D 命令序列
         cmds = [
-            f"; Auto-generated FLAC3D Analysis Script by GeoMeshAuto",
+            f"; Auto-generated FLAC3D Analysis Script by SlopeRA3D",
             f"model new",
             f"model large-strain off",
             
@@ -168,6 +170,7 @@ class Flac3DRunner:
                 cmds.append(f"zone property {prop_str} range group '{l_name}'")
 
         # 继续添加剩余命令
+        balanced_sav_path = safe_save_path_base.replace('model.sav', 'model_balanced.sav').replace('model_final.sav', 'model_balanced.sav')
         cmds.extend([
             f"; --- Boundary Conditions ---",
             f"zone face apply velocity-z 0 range position-z {b_zmin}",
@@ -175,27 +178,31 @@ class Flac3DRunner:
             f"zone face apply velocity-x 0 range position-x {x_max_mesh}",
             f"zone face apply velocity-y 0 range position-y {y_min_mesh}",
             f"zone face apply velocity-y 0 range position-y {y_max_mesh}",
-            
+
             f"; --- Initial Equilibrium (Elastic) ---",
             f"model gravity 0 0 {config.GRAVITY_Z}",
             f"model solve elastic ratio {config.SOLVE_ELASTIC_RATIO}",
-            
-            f"; --- Save Balanced State ---",
-            f"model save '{safe_save_path_base.replace('model.sav', 'model_balanced.sav').replace('model_final.sav', 'model_balanced.sav')}'",
 
-            f"; --- Reset State ---",
-            f"zone gridpoint initialize displacement (0,0,0)",
-            f"zone gridpoint initialize velocity (0,0,0)",
-            
-            f"; --- Factor of Safety Calculation ---",
-            f"model factor-of-safety ratio-local {config.SOLVE_FOS_RATIO}",
-            
-            f"; --- Final Result ---",
-            # f"model save '{safe_save_path}'", # 不需要再保存 model_final.sav
-            f"model title 'GeoMeshAuto Final Result'",
-            
-            f"; quit" # 退出
+            f"; --- Save Balanced State ---",
+            f"model save '{balanced_sav_path}'",
         ])
+
+        if run_fos:
+            cmds.extend([
+                f"; --- Reset State ---",
+                f"zone gridpoint initialize displacement (0,0,0)",
+                f"zone gridpoint initialize velocity (0,0,0)",
+
+                f"; --- Factor of Safety Calculation ---",
+                f"model factor-of-safety ratio-local {config.SOLVE_FOS_RATIO}",
+
+                f"; --- Final Result ---",
+                f"model title 'SlopeRA3D Final Result'",
+            ])
+        else:
+            cmds.append(f"; --- FOS skipped (Reliability Analysis will run Monte Carlo FOS) ---")
+
+        cmds.append(f"program quit")  # 通知 FLAC3D 控制台退出，必须是真实命令而非注释
         
         # 3. 写入 .dat 脚本文件
         script_path = os.path.join(output_dir, 'run_analysis.dat')
@@ -222,10 +229,13 @@ class Flac3DRunner:
                 cwd=output_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,  # 防止 FLAC3D 脚本结束后等待 stdin
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 bufsize=1
             )
-            
+
             # 实时读取输出
             last_operation = None
             
@@ -263,16 +273,290 @@ class Flac3DRunner:
 
             return_code = process.poll()
             elapsed = time.time() - start_time
-            
+
             print("  " + "="*50)
-            
+            print(f"  [FLAC3D] Process exited (code={return_code}, elapsed={elapsed:.1f}s)")
+            print("  " + "="*50)
+
             if return_code == 0:
                 print(f"  [Success] FLAC3D analysis completed in {elapsed:.2f}s.")
                 return True
             else:
-                print(f"  [Failed] FLAC3D exited with code {return_code}.")
+                print(f"  [Info] FLAC3D exited with code {return_code} (non-zero is normal for FLAC3D).")
                 return False
 
         except Exception as e:
             print(f"  [Error] Failed to launch FLAC3D process: {e}")
             return False
+
+    # ------------------------------------------------------------------
+    # 可靠度分析（Monte Carlo + 随机场）
+    # ------------------------------------------------------------------
+
+    def run_reliability_sequence(self, output_dir, config):
+        """
+        生成随机场 Monte Carlo 分析脚本并执行。
+
+        流程：
+          1. 将 Monte Carlo Python 脚本写入 output_dir/rf_monte_carlo.py
+          2. 生成调用该脚本的 FLAC3D .dat 文件
+          3. 调用 FLAC3D 控制台执行
+          4. 读取结果并打印统计摘要
+
+        :param output_dir : 输出目录（含 model_balanced.sav）
+        :param config     : 配置对象
+        :return bool      : 是否成功
+        """
+        print(f"\n[Flac3DRunner] Preparing Reliability Analysis (Monte Carlo)...")
+
+        # 路径准备
+        src_dir         = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src')
+        balanced_sav    = os.path.join(output_dir, 'model_balanced.sav').replace('\\', '/')
+        rf_script_path  = os.path.join(output_dir, 'rf_monte_carlo.py')
+        dat_script_path = os.path.join(output_dir, 'run_reliability.dat')
+        results_csv     = os.path.join(output_dir, 'fos_results.csv')
+
+        # 配置参数
+        nsim        = getattr(config, 'RF_NSIM',  100)
+        acf_type    = getattr(config, 'RF_ACF',   1)
+        r_xy        = getattr(config, 'RF_RXY',   -0.5)
+        fos_ratio   = getattr(config, 'SOLVE_FOS_RATIO', 1e-4)
+        layers_cfg  = getattr(config, 'LAYERS',   [])
+
+        if not layers_cfg:
+            print("  [Error] LAYERS not configured. Cannot run reliability analysis.")
+            return False
+
+        # 1. 生成 Monte Carlo Python 脚本（在 FLAC3D 内部执行）
+        self._write_rf_monte_carlo_script(
+            rf_script_path, src_dir, balanced_sav, results_csv,
+            nsim, acf_type, r_xy, fos_ratio, layers_cfg
+        )
+
+        # 2. 生成 .dat 脚本，使用 "program python 'filepath'" 调用外部 Python 文件
+        # FLAC3D 7.0 正确语法：program python 'absolute/path/to/script.py'
+        safe_rf_script = rf_script_path.replace('\\', '/')
+        dat_content = (
+            f"; Auto-generated Reliability Analysis Script\n"
+            f"program call '{safe_rf_script}'\n"
+            f"program quit\n"
+        )
+        with open(dat_script_path, 'w', encoding='utf-8') as f:
+            f.write(dat_content)
+
+        print(f"  MC script : {rf_script_path}")
+        print(f"  DAT script: {dat_script_path}")
+
+        # 3. 调用 FLAC3D 控制台执行
+        exe_path = getattr(config, 'FLAC3D_CONSOLE_PATH', None)
+        if not exe_path or not os.path.exists(exe_path):
+            print(f"  [Error] FLAC3D console not found: {exe_path}")
+            return False
+
+        success = self._execute_script(exe_path, dat_script_path, output_dir, nsim)
+
+        # 4. 读取结果并打印摘要
+        if success and os.path.exists(results_csv):
+            self._print_reliability_summary(results_csv)
+
+        return success
+
+    def _write_rf_monte_carlo_script(self, script_path, src_dir, balanced_sav,
+                                     results_csv, nsim, acf_type, r_xy,
+                                     fos_ratio, layers_cfg):
+        """
+        生成在 FLAC3D 内部运行的 Monte Carlo Python 脚本。
+        脚本通过 itasca API 获取单元坐标和分组，调用 RandomFieldGenerator 生成随机场，
+        循环执行 FOS 计算并将结果写入 CSV。
+        """
+        # 将 layers_cfg 序列化为 Python 字面量字符串（嵌入脚本中）
+        import pprint
+        layers_repr = pprint.pformat(layers_cfg)
+
+        safe_src   = src_dir.replace('\\', '/')
+        safe_bsav  = balanced_sav.replace('\\', '/')
+        safe_csv   = results_csv.replace('\\', '/')
+
+        script = f"""\
+# Auto-generated Monte Carlo Reliability Analysis Script
+# Runs inside FLAC3D console via: python execute '<this_file>'
+import itasca as it
+import numpy as np
+import sys
+import csv
+
+it.command("python-reset-state false")
+
+# Add project src to path so RandomFieldGenerator can be imported
+sys.path.insert(0, r'{safe_src}')
+from random_field import RandomFieldGenerator
+
+# ---- Configuration (injected at generation time) ----
+NSIM       = {nsim}
+ACF_TYPE   = {acf_type}
+R_XY       = {r_xy}
+FOS_RATIO  = {fos_ratio}
+LAYERS_CONFIG = {layers_repr}
+BALANCED_SAV  = r'{safe_bsav}'
+OUTPUT_CSV    = r'{safe_csv}'
+# -----------------------------------------------------
+
+print("[RF] Loading balanced model...")
+it.command(f"model restore '{{BALANCED_SAV}}'")
+
+print("[RF] Reading zone data from FLAC3D...")
+pos = np.array(it.zonearray.pos())   # shape (N, 3)
+n_zones = pos.shape[0]
+
+# Build zone group array
+layer_names = [layer['name'] for layer in LAYERS_CONFIG]
+zone_groups = np.full(n_zones, 'unknown', dtype=object)
+for name in layer_names:
+    in_grp = np.array(it.zonearray.in_group(name, 'layers'), dtype=bool)
+    zone_groups[in_grp] = name
+
+print(f"[RF] Total zones: {{n_zones}}")
+for name in layer_names:
+    count = np.sum(zone_groups == name)
+    print(f"  Layer '{{name}}': {{count}} zones")
+
+# Generate random field samples
+print("[RF] Generating random field samples...")
+rf = RandomFieldGenerator(
+    layers_config=LAYERS_CONFIG,
+    acf_type=ACF_TYPE,
+    r_xy=R_XY,
+    nsim=NSIM,
+    seed=1
+)
+cohesion_matrix, friction_matrix = rf.generate(pos, zone_groups)
+print(f"[RF] Random field generated. Shape: {{cohesion_matrix.shape}}")
+
+# Monte Carlo FOS loop
+print(f"[RF] Starting Monte Carlo simulation (Nsim={{NSIM}})...")
+results = []
+for i in range(NSIM):
+    # Restore balanced state
+    it.command(f"model restore '{{BALANCED_SAV}}'")
+    it.command("zone gridpoint initialize displacement (0,0,0)")
+    it.command("zone gridpoint initialize velocity (0,0,0)")
+
+    # Apply random field properties for this simulation
+    c_i   = cohesion_matrix[:, i]
+    phi_i = np.clip(friction_matrix[:, i], 1.0, 89.0)
+    it.zonearray.set_prop_scalar('cohesion', c_i)
+    it.zonearray.set_prop_scalar('friction', phi_i)
+
+    # Run FOS (no filename → no intermediate .sav files)
+    it.command(f"model factor-of-safety ratio-local {{FOS_RATIO}}")
+    fos = it.fos()
+
+    avg_c   = float(np.mean(c_i)) / 1000.0   # Pa → kPa
+    avg_phi = float(np.mean(phi_i))
+    results.append([i + 1, round(avg_c, 3), round(avg_phi, 3), round(fos, 6)])
+
+    print(f"  [MC] Sim {{i+1:>4d}}/{{NSIM}}: "
+          f"avg_c={{avg_c:.1f}} kPa, avg_phi={{avg_phi:.1f}} deg, FOS={{fos:.4f}}")
+
+# Save results to CSV
+with open(OUTPUT_CSV, 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(['sim', 'avg_c_kPa', 'avg_phi_deg', 'FOS'])
+    writer.writerows(results)
+
+print(f"[RF] Results saved to: {{OUTPUT_CSV}}")
+"""
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(script)
+        print(f"  MC Python script written: {script_path}")
+
+    def _execute_script(self, exe_path, dat_path, cwd, nsim):
+        """调用 FLAC3D 控制台执行指定 .dat 脚本，实时过滤输出。"""
+        print(f"  Launching FLAC3D for reliability analysis ({nsim} simulations)...")
+        print("  " + "=" * 50)
+
+        try:
+            start_time = time.time()
+            process = subprocess.Popen(
+                [exe_path, dat_path],
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,  # 防止 FLAC3D 脚本结束后等待 stdin
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1
+            )
+
+            last_fos_op = None
+            while True:
+                line = process.stdout.readline()
+                if not line and process.poll() is not None:
+                    break
+                if line:
+                    stripped = line.strip()
+                    is_fos_line = "Bracketing-" in stripped or "Perturbation-" in stripped
+                    if is_fos_line:
+                        parts = stripped.split()
+                        if parts:
+                            op = parts[0]
+                            if op != last_fos_op:
+                                sys.stdout.write(f"    [F3D] FOS: {op}...\n")
+                                sys.stdout.flush()
+                                last_fos_op = op
+                    else:
+                        if ("Operation" in stripped and "Step" in stripped) or "----------" in stripped:
+                            continue
+                        sys.stdout.write(f"    [F3D] {line}")
+                        sys.stdout.flush()
+
+            rc = process.poll()
+            elapsed = time.time() - start_time
+            print("  " + "=" * 50)
+
+            if rc == 0:
+                print(f"  [Success] Reliability analysis completed in {elapsed:.1f}s.")
+                return True
+            else:
+                print(f"  [Failed] FLAC3D exited with code {rc}.")
+                return False
+
+        except Exception as e:
+            print(f"  [Error] Failed to launch FLAC3D: {e}")
+            return False
+
+    def _print_reliability_summary(self, csv_path):
+        """读取 FOS 结果 CSV，计算并打印统计摘要。"""
+        fos_values = []
+        try:
+            with open(csv_path, newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    fos_values.append(float(row['FOS']))
+        except Exception as e:
+            print(f"  [Warning] Could not read results: {e}")
+            return
+
+        if not fos_values:
+            return
+
+        arr = np.array(fos_values)
+        n          = len(arr)
+        mean_fos   = np.mean(arr)
+        std_fos    = np.std(arr)
+        min_fos    = np.min(arr)
+        max_fos    = np.max(arr)
+        pf         = np.sum(arr < 1.0) / n * 100.0   # 失效概率 (%)
+        beta       = mean_fos / std_fos if std_fos > 0 else float('inf')  # 简化可靠度指标
+
+        print("\n  " + "=" * 45)
+        print("  === Reliability Analysis Results ===")
+        print(f"  Simulations   : {n}")
+        print(f"  Mean FOS      : {mean_fos:.4f}")
+        print(f"  Std Dev       : {std_fos:.4f}")
+        print(f"  Min / Max FOS : {min_fos:.4f} / {max_fos:.4f}")
+        print(f"  P(FOS < 1.0)  : {pf:.2f}%  (Failure Probability)")
+        print(f"  Beta Index    : {beta:.3f}  (= Mean/Std, simplified)")
+        print(f"  Results CSV   : {csv_path}")
+        print("  " + "=" * 45)

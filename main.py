@@ -20,7 +20,7 @@ def select_tif_file():
     return file_path
 
 def main():
-    print("=== GeoMeshAuto: TIF to FLAC3D Pipeline ===")
+    print("=== SlopeRA3D: TIF to FLAC3D Pipeline ===")
     
     # 1. 询问是否选择新文件
     print("Please select a GeoTIFF file to start analysis...")
@@ -132,19 +132,45 @@ def main():
     # STEP 3: FLAC3D 分析计算 (外部控制台调用)
     # ==========================================
     print("\n>>> STEP 3: FLAC3D Analysis (Console Mode)...")
+    runner = Flac3DRunner()
+    step3_success = False
     try:
-        runner = Flac3DRunner()
-        # 直接调用 run_analysis_sequence，内部会处理脚本生成和 EXE 调用
-        # model_final.sav 路径不再作为参数传递，或传 None
-        success = runner.run_analysis_sequence(output_stl_path, None, bounds, config)
-        
-        if success:
-             print("  [Success] FLAC3D analysis finished successfully.")
+        # RF_ENABLED=True 时跳过 STEP 3 的 FOS，由 STEP 4 的 Monte Carlo 代替
+        run_fos = not getattr(config, 'RF_ENABLED', False)
+        success = runner.run_analysis_sequence(output_stl_path, None, bounds, config, run_fos=run_fos)
+        # 以 model_balanced.sav 是否生成作为成功的最终判断，
+        # 避免 FLAC3D 控制台退出码非零但实际已完成计算的误判
+        balanced_sav = os.path.join(output_dir, 'model_balanced.sav')
+        balanced_exists = os.path.exists(balanced_sav)
+        print(f"  [Check] model_balanced.sav exists: {balanced_exists}")
+        if success or balanced_exists:
+            print("  [Success] STEP 3 complete. Balanced model ready.")
+            step3_success = True
         else:
-             print("  [Warning] FLAC3D process encountered an issue.")
-             
+            print("  [Warning] FLAC3D process encountered an issue.")
     except Exception as e:
         print(f"  [Error] Unexpected error during FLAC3D invocation: {e}")
+
+    # ==========================================
+    # STEP 4: 随机场可靠度分析 (Monte Carlo)
+    # ==========================================
+    print(f"\n[Pipeline] step3_success={step3_success}, RF_ENABLED={getattr(config, 'RF_ENABLED', False)}")
+    if step3_success and getattr(config, 'RF_ENABLED', False):
+        print("\n" + "="*55)
+        print(">>> STEP 4: Reliability Analysis (Random Field Monte Carlo)")
+        print("="*55)
+        print(f"  ACF Type : {config.RF_ACF}  |  Nsim : {config.RF_NSIM}  |  r_xy : {config.RF_RXY}")
+        print()
+        confirm = input("  >>> Start reliability analysis? [Y/n]: ").strip().lower()
+        if confirm in ('', 'y', 'yes'):
+            try:
+                runner.run_reliability_sequence(output_dir, config)
+            except Exception as e:
+                print(f"  [Error] Unexpected error during reliability analysis: {e}")
+        else:
+            print("  [Info] Reliability analysis skipped.")
+    elif step3_success and not getattr(config, 'RF_ENABLED', False):
+        print("\n[Info] RF_ENABLED=False in config.py, skipping reliability analysis.")
 
     print("\n=== Pipeline Completed ===")
 
