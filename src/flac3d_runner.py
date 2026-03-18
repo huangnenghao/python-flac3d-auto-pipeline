@@ -9,7 +9,8 @@ class Flac3DRunner:
     def __init__(self):
         self.script_lines = []
 
-    def run_analysis_sequence(self, stl_path, save_path, bounds, config, run_fos=True):
+    def run_analysis_sequence(self, stl_path, save_path, bounds, config, run_fos=True,
+                              structure_cmds=None, mesh_import_path=None):
         """
         生成 FLAC3D 脚本并调用控制台程序执行全套分析流程
         :param stl_path: 地形 STL 文件绝对路径
@@ -168,6 +169,29 @@ class Flac3DRunner:
                     f"tension {props['tension']}"
                 )
                 cmds.append(f"zone property {prop_str} range group '{l_name}'")
+
+        # 注入 structure 元素命令 (Path A)
+        if structure_cmds:
+            cmds.append("")
+            cmds.extend(structure_cmds)
+            cmds.append("")
+
+        # 注入结构体材料属性 (Path A/B 通用)
+        struct_mat = getattr(config, 'STRUCTURE_MAT_PROPS', {})
+        if struct_mat:
+            cmds.append("; --- Structure Material Properties ---")
+            for mat_name, props in struct_mat.items():
+                # 只有当存在对应 group 时才赋值（由 Gmsh Path B 创建的 zone group）
+                if mesh_import_path:
+                    prop_str = (
+                        f"density {props['density']} "
+                        f"young {props['young']} "
+                        f"poisson {props['poisson']} "
+                        f"cohesion {props['cohesion']} "
+                        f"friction {props['friction']} "
+                        f"tension {props['tension']}"
+                    )
+                    cmds.append(f"zone property {prop_str} range group '{mat_name}'")
 
         # 继续添加剩余命令
         balanced_sav_path = safe_save_path_base.replace('model.sav', 'model_balanced.sav').replace('model_final.sav', 'model_balanced.sav')

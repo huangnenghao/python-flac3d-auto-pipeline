@@ -129,6 +129,68 @@ def main():
         return # 第二步失败直接退出
 
     # ==========================================
+    # STEP 2.5: 结构处理 (SSI - 可选)
+    # ==========================================
+    structure_cmds = None  # Path A: 注入 flac3d_runner 的命令列表
+    mesh_import_path = None  # Path B: Gmsh 生成的 .f3grid 路径
+
+    ssi_enabled = getattr(config, 'SSI_ENABLED', False)
+    ssi_path = getattr(config, 'SSI_PATH', 'A')
+
+    if ssi_enabled:
+        print("\n>>> STEP 2.5: Structure Processing (SSI)...")
+        try:
+            from src.schema_parser import StructureSchemaParser
+
+            # 确定 schema 文件路径
+            schema_path = getattr(config, 'SSI_SCHEMA_PATH', None)
+            if schema_path is None:
+                schema_path = os.path.join(input_dir, 'structure_schema.json')
+                if not os.path.exists(schema_path):
+                    # 也检查 .py 格式
+                    schema_path_py = os.path.join(input_dir, 'structure_schema.py')
+                    if os.path.exists(schema_path_py):
+                        schema_path = schema_path_py
+                    else:
+                        raise FileNotFoundError(
+                            f"No structure schema found in {input_dir}. "
+                            f"Expected 'structure_schema.json' or 'structure_schema.py', "
+                            f"or set SSI_SCHEMA_PATH in config.py"
+                        )
+
+            print(f"  Schema file: {schema_path}")
+
+            # 解析 schema
+            parser = StructureSchemaParser()
+            parser.load(schema_path)
+            parser.normalize_units(target_unit='m')
+            parser.apply_transform(builder.pca_angle, builder.centroid)
+            parser.validate()
+
+            if ssi_path == 'A':
+                # Path A: 生成 FLAC3D structure 元素命令
+                from src.structure_elements import StructureElementGenerator
+
+                classified = parser.classify_for_path_a()
+                n_piles = len(classified.get('piles', []))
+                print(f"  [Path A] Generating structure element commands ({n_piles} piles)...")
+
+                generator = StructureElementGenerator(config)
+                structure_cmds = generator.generate_all(classified)
+                print(f"  [Success] {len(structure_cmds)} FLAC3D commands generated.")
+
+            elif ssi_path == 'B':
+                # Path B: Gmsh 实体建模 (Phase 3/4 实现)
+                print("  [Path B] Gmsh solid modeling - not yet implemented.")
+                print("  [Info] Falling back to terrain-only analysis.")
+
+        except Exception as e:
+            print(f"  [Error] Structure processing failed: {e}")
+            import traceback
+            traceback.print_exc()
+            print("  [Info] Continuing with terrain-only analysis.")
+
+    # ==========================================
     # STEP 3: FLAC3D 分析计算 (外部控制台调用)
     # ==========================================
     print("\n>>> STEP 3: FLAC3D Analysis (Console Mode)...")
@@ -137,7 +199,10 @@ def main():
     try:
         # RF_ENABLED=True 时跳过 STEP 3 的 FOS，由 STEP 4 的 Monte Carlo 代替
         run_fos = not getattr(config, 'RF_ENABLED', False)
-        success = runner.run_analysis_sequence(output_stl_path, None, bounds, config, run_fos=run_fos)
+        success = runner.run_analysis_sequence(
+            output_stl_path, None, bounds, config, run_fos=run_fos,
+            structure_cmds=structure_cmds, mesh_import_path=mesh_import_path
+        )
         # 以 model_balanced.sav 是否生成作为成功的最终判断，
         # 避免 FLAC3D 控制台退出码非零但实际已完成计算的误判
         balanced_sav = os.path.join(output_dir, 'model_balanced.sav')
