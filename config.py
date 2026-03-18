@@ -93,3 +93,40 @@ RF_ACF     = 1         # 自相关函数类型:
                        #   4 = 二阶马尔可夫 (Second-Order Markov)
                        #   5 = 线性/三角形 (Linear/Triangular)
 RF_RXY     = -0.5      # c 与 phi 之间的互相关系数 (负值表示负相关)
+
+# ============================================================
+# 结构-地层相互作用 (SSI) 配置
+# ============================================================
+SSI_ENABLED = False         # 是否启用结构体建模
+SSI_PATH = 'A'              # 'A' = FLAC3D structure 元素, 'B' = Gmsh 实体 zone
+SSI_SCHEMA_PATH = None      # LLM 生成的结构 schema 文件路径 (.json 或 .py)
+                            # 若为 None，则在项目 input 目录查找 structure_schema.json
+
+# --- Path A: FLAC3D Structure 元素参数 ---
+STRUCTURE_ELEMENTS = {
+    'pile': {
+        'cross_section_area': 1.767,        # m^2 (D=1.5m 圆形截面)
+        'young': 3e10,                       # Pa (C30 混凝土)
+        'moi': 0.2485,                       # m^4 (惯性矩)
+        'perimeter': 4.712,                  # m (周长)
+        'coupling_stiffness_normal': 1e8,    # N/m/m (法向耦合刚度)
+        'coupling_stiffness_shear': 1e8,     # N/m/m (切向耦合刚度)
+        'coupling_cohesion': 0,              # Pa (耦合粘聚力)
+        'coupling_friction': 30.0,           # degrees (耦合摩擦角)
+        'segments': 20,                      # 每根桩的分段数
+    },
+}
+
+# --- Path B: Gmsh 网格参数 ---
+GMSH_MESH_SIZE_TERRAIN = 2.0     # m, 地质体网格尺寸
+GMSH_MESH_SIZE_STRUCTURE = 0.5   # m, 结构体附近网格尺寸
+GMSH_MESH_ALGORITHM = 6          # 1=MeshAdapt, 6=Frontal-Delaunay (推荐)
+GMSH_OPTIMIZE_QUALITY = True     # 网格优化
+
+# --- 结构体材料参数 (两种路径通用) ---
+STRUCTURE_MAT_PROPS = {
+    'concrete': {
+        'density': 2500.0, 'young': 3e10, 'poisson': 0.2,
+        'cohesion': 5e6, 'friction': 45.0, 'tension': 3e6,
+    },
+}

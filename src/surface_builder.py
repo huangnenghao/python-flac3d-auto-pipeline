@@ -12,6 +12,9 @@ class SurfaceBuilder:
         self.y = y_grid
         self.z = z_grid
         self.mesh = None
+        # PCA 变换参数（build_mesh 后可用，供结构坐标对齐使用）
+        self.pca_angle = 0.0    # 主轴与 X 轴夹角（弧度）
+        self.centroid = np.array([0.0, 0.0, 0.0])  # 变换前的质心
 
     def build_mesh(self):
         """
@@ -130,7 +133,11 @@ class SurfaceBuilder:
         # 计算旋转角度 (将 major_axis 旋转到 X 轴 (1, 0))
         # angle = arctan2(y, x)
         angle = np.arctan2(major_axis[1], major_axis[0])
-        
+
+        # 保存 PCA 参数，供外部坐标对齐使用
+        self.pca_angle = angle
+        self.centroid = centroid.copy()
+
         print(f"  Principal Axis found. Rotation angle: {np.degrees(-angle):.2f} degrees")
         
         # 构建旋转矩阵 (绕 Z 轴旋转 -angle)
