@@ -27,9 +27,9 @@ Z_SCALE = 1.0          # 高程缩放
 STL_FILENAME = 'terrain_surface.stl'
 
 # FLAC3D 网格配置
-MESH_RES_X = 5     # FLAC3D 初始网格 X 方向尺寸
-MESH_RES_Y = 5      # FLAC3D 初始网格 Y 方向尺寸
-MESH_RES_Z = 5      # FLAC3D 初始网格 Z 方向尺寸
+MESH_RES_X = 2     # FLAC3D 初始网格 X 方向尺寸
+MESH_RES_Y = 2      # FLAC3D 初始网格 Y 方向尺寸
+MESH_RES_Z = 2      # FLAC3D 初始网格 Z 方向尺寸
 MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离 (建议足够深以容纳所有地层)
 
 # 地层结构定义 (从上往下)
@@ -84,8 +84,8 @@ SOLVE_FOS_RATIO = 1e-4
 # ============================================================
 # 随机场 & 可靠度分析参数 (Monte Carlo)
 # ============================================================
-RF_ENABLED = True      # 是否在 FOS 计算后自动执行可靠度分析
-RF_NSIM    = 10       # Monte Carlo 模拟次数
+RF_ENABLED = False     # 是否在 FOS 计算后自动执行可靠度分析
+RF_NSIM    = 100       # Monte Carlo 模拟次数
 RF_ACF     = 1         # 自相关函数类型:
                        #   1 = 单指数 (Single Exponential)
                        #   2 = 平方指数/高斯 (Squared Exponential)

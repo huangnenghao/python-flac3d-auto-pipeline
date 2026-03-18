@@ -31,7 +31,6 @@ data/longronglaowu2/output/FOS-Unstable.sav
 data/longronglaowu2/output/model_balanced.sav
 data/longronglaowu2/output/run_analysis.dat
 data/longronglaowu2/output/terrain_surface.stl
-data/test/input/longronglaowu2.tif
 data/test/output/FOS-Init.sav
 data/test/output/FOS-Stable.sav
 data/test/output/FOS-Unstable.sav
