@@ -97,7 +97,7 @@ RF_RXY     = -0.5      # c 与 phi 之间的互相关系数 (负值表示负相�
 # ============================================================
 # 结构-地层相互作用 (SSI) 配置
 # ============================================================
-SSI_ENABLED = False         # 是否启用结构体建模
+SSI_ENABLED = True          # 是否启用结构体建模
 SSI_PATH = 'A'              # 'A' = FLAC3D structure 元素, 'B' = Gmsh 实体 zone
 SSI_SCHEMA_PATH = None      # LLM 生成的结构 schema 文件路径 (.json 或 .py)
                             # 若为 None，则在项目 input 目录查找 structure_schema.json

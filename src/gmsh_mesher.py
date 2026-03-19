@@ -513,7 +513,10 @@ class GmshMesher:
                 print(f"  [Warning] Size field setup failed: {e}")
 
         # 网格算法
-        gmsh.option.setNumber("Mesh.Algorithm3D", self.mesh_algorithm)
+        # Algorithm 值 (1=MeshAdapt, 5=Delaunay, 6=Frontal-Delaunay) 用于 2D
+        # Algorithm3D 值 (1=Delaunay, 4=Frontal, 7=MMG3D, 10=HXT) 用于 3D
+        gmsh.option.setNumber("Mesh.Algorithm", self.mesh_algorithm)
+        gmsh.option.setNumber("Mesh.Algorithm3D", 1)  # Delaunay for 3D
 
     def generate_mesh(self):
         """生成 3D 四面体网格。"""
