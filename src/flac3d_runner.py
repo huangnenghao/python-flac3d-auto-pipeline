@@ -85,23 +85,44 @@ class Flac3DRunner:
             f"; Auto-generated FLAC3D Analysis Script by SlopeRA3D",
             f"model new",
             f"model large-strain off",
-            
-            f"; --- Geometry Import ---",
-            f"geometry import '{safe_stl_path}' set 'terrain'",
-            
-            f"; --- Seed Mesh Generation ---",
-            f"zone create brick size {nx} {ny} 1 point 0 ({x_min_mesh}, {y_min_mesh}, {b_zmin}) point 1 ({x_max_mesh}, {y_min_mesh}, {b_zmin}) point 2 ({x_min_mesh}, {y_max_mesh}, {b_zmin}) point 3 ({x_min_mesh}, {y_min_mesh}, {seed_z_top})",
-            
-            f"; --- Extrude from Topography ---",
-            f"zone face group 'seed_top' range position-z {seed_z_top}",
-            f"zone generate from-topography geometry-set 'terrain' range group 'seed_top' segments {layers}",
-            
-            f"; --- Grouping & Properties (Multi-Layer) ---",
-            f"zone cmodel assign mohr-coulomb",
         ]
 
+        # --- 网格生成：Path B (Gmsh 导入) 或默认 (seed + extrude) ---
+        if mesh_import_path:
+            # Path B: 导入 Gmsh 生成的 .f3grid 网格
+            safe_mesh_path = mesh_import_path.replace('\\', '/')
+            cmds.extend([
+                f"; --- Mesh Import (Path B: Gmsh) ---",
+                f"zone import '{safe_mesh_path}'",
+                f"",
+                f"; --- Geometry Import (for reference) ---",
+                f"geometry import '{safe_stl_path}' set 'terrain'",
+                f"",
+                f"; --- Properties ---",
+                f"zone cmodel assign mohr-coulomb",
+            ])
+            # Path B: 分组已在 .f3grid 中定义，跳过 geometry-distance 分组
+            # 直接赋值材料属性
+        else:
+            # 默认路径: seed brick + extrude from topography
+            cmds.extend([
+                f"; --- Geometry Import ---",
+                f"geometry import '{safe_stl_path}' set 'terrain'",
+                f"",
+                f"; --- Seed Mesh Generation ---",
+                f"zone create brick size {nx} {ny} 1 point 0 ({x_min_mesh}, {y_min_mesh}, {b_zmin}) point 1 ({x_max_mesh}, {y_min_mesh}, {b_zmin}) point 2 ({x_min_mesh}, {y_max_mesh}, {b_zmin}) point 3 ({x_min_mesh}, {y_min_mesh}, {seed_z_top})",
+                f"",
+                f"; --- Extrude from Topography ---",
+                f"zone face group 'seed_top' range position-z {seed_z_top}",
+                f"zone generate from-topography geometry-set 'terrain' range group 'seed_top' segments {layers}",
+                f"",
+                f"; --- Grouping & Properties (Multi-Layer) ---",
+                f"zone cmodel assign mohr-coulomb",
+            ])
+
         # 动态生成地层分组和属性赋值命令
-        # 我们使用 range geometry-distance 来实现
+        # Path B 时分组已在 .f3grid 中，但仍需赋值材料属性
+        # 使用 range geometry-distance 来实现分组（仅默认路径）
         # 逻辑：
         # 1. 默认所有单元为最后一层 (bedrock)
         # 2. 然后从倒数第二层开始向上遍历，覆盖之前的设置
@@ -110,7 +131,7 @@ class Flac3DRunner:
         
         # 获取地层配置
         layers_config = getattr(config, 'LAYERS', [])
-        
+
         # 如果没有配置 layers，回退到默认单层逻辑 (为了兼容性)
         if not layers_config:
             # 构造一个默认层
@@ -125,41 +146,34 @@ class Flac3DRunner:
             cmds.append(f"zone group 'soil_layer' slot 'layers'")
             cmds.append(f"zone property {default_props}")
         else:
-            # 1. 首先，将所有单元分配给最后一层 (通常是基岩)
-            base_layer = layers_config[-1]
-            base_name = base_layer['name']
-            
-            cmds.append(f"; Initialize all zones to base layer: {base_name}")
-            cmds.append(f"zone group '{base_name}' slot 'layers'")
-            
-            # 2. 从下往上倒序遍历（除了最后一层），利用 geometry-distance 覆盖
-            # 注意：config 中是 [top, middle, bottom]，我们需要反过来处理
-            # 假设: top (0-2m), middle (2-7m).
-            # range geometry-distance gap 7 -> 选中 0-7m 的范围
-            # range geometry-distance gap 2 -> 选中 0-2m 的范围
-            # 所以，如果我们先应用 gap 7 (middle)，再应用 gap 2 (top)，那么 0-2m 的会被 top 覆盖，2-7m 的保留 middle。
-            
-            acc_thickness = 0.0
-            layer_depths = []
-            for layer in layers_config[:-1]:
-                if layer['thickness'] is not None:
-                    acc_thickness += layer['thickness']
-                    layer_depths.append((layer, acc_thickness))
-            
-            # 倒序遍历 (先处理深的，再处理浅的)
-            for layer, depth in reversed(layer_depths):
-                layer_name = layer['name']
-                cmds.append(f"; Assign layer: {layer_name} (Depth <= {depth}m)")
-                # 修正：geometry-distance 不需要 'set' 关键字，直接跟集合名称
-                # 语法: range geometry-distance 'terrain' gap {depth}
-                cmds.append(f"zone group '{layer_name}' slot 'layers' range geometry-distance 'terrain' gap {depth}")
+            # --- 分组逻辑（仅默认路径，Path B 分组已在 .f3grid 中）---
+            if not mesh_import_path:
+                # 1. 首先，将所有单元分配给最后一层 (通常是基岩)
+                base_layer = layers_config[-1]
+                base_name = base_layer['name']
 
-            # 3. 循环赋值材料参数
+                cmds.append(f"; Initialize all zones to base layer: {base_name}")
+                cmds.append(f"zone group '{base_name}' slot 'layers'")
+
+                # 2. 从下往上倒序遍历（除了最后一层），利用 geometry-distance 覆盖
+                acc_thickness = 0.0
+                layer_depths = []
+                for layer in layers_config[:-1]:
+                    if layer['thickness'] is not None:
+                        acc_thickness += layer['thickness']
+                        layer_depths.append((layer, acc_thickness))
+
+                # 倒序遍历 (先处理深的，再处理浅的)
+                for layer, depth in reversed(layer_depths):
+                    layer_name = layer['name']
+                    cmds.append(f"; Assign layer: {layer_name} (Depth <= {depth}m)")
+                    cmds.append(f"zone group '{layer_name}' slot 'layers' range geometry-distance 'terrain' gap {depth}")
+
+            # --- 材料属性赋值（两种路径通用）---
             cmds.append(f"; Assign Material Properties")
             for layer in layers_config:
                 l_name = layer['name']
                 props = layer['mat_props']
-                # 注意：此处使用字典 key 获取参数
                 prop_str = (
                     f"density {props['density']} "
                     f"young {props['young']} "

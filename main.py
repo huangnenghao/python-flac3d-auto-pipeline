@@ -180,9 +180,34 @@ def main():
                 print(f"  [Success] {len(structure_cmds)} FLAC3D commands generated.")
 
             elif ssi_path == 'B':
-                # Path B: Gmsh 实体建模 (Phase 3/4 实现)
-                print("  [Path B] Gmsh solid modeling - not yet implemented.")
-                print("  [Info] Falling back to terrain-only analysis.")
+                # Path B: Gmsh 实体建模
+                from src.gmsh_mesher import GmshMesher
+
+                gmsh_config = {
+                    'mesh_size_terrain': getattr(config, 'GMSH_MESH_SIZE_TERRAIN', 2.0),
+                    'mesh_size_structure': getattr(config, 'GMSH_MESH_SIZE_STRUCTURE', 0.5),
+                    'algorithm': getattr(config, 'GMSH_MESH_ALGORITHM', 6),
+                    'optimize': getattr(config, 'GMSH_OPTIMIZE_QUALITY', True),
+                }
+
+                primitives, operations = parser.parse()
+                final_ids = parser.get_structure_ids()
+
+                print(f"  [Path B] Gmsh solid modeling: "
+                      f"{len(primitives)} primitives, {len(operations)} operations")
+
+                mesher = GmshMesher(
+                    stl_path=output_stl_path,
+                    bounds=bounds,
+                    schema_primitives=primitives,
+                    schema_operations=operations,
+                    layers_config=getattr(config, 'LAYERS', []),
+                    gmsh_config=gmsh_config,
+                    structure_final_ids=final_ids,
+                )
+
+                mesh_import_path = mesher.run(output_dir)
+                print(f"  [Success] Gmsh mesh exported to: {mesh_import_path}")
 
         except Exception as e:
             print(f"  [Error] Structure processing failed: {e}")
