@@ -3,7 +3,7 @@ StructureSchemaParser: 解析 LLM 生成的结构 SCHEMA，处理单位转换和
 
 SCHEMA 格式参考 generated_rhino_model（参考）.py 中的 SCHEMA dict：
   - meta: 元数据（单位、置信度、假设等）
-  - primitives: 几何体列表（box, cylinder, polyline_extrude）
+  - primitives: 几何体列表（box, cylinder, polyline_extrude, line_segment）
   - operations: 布尔运算列表（union, difference, intersection）
   - outputs: 最终输出对象标识
 """
@@ -118,11 +118,44 @@ class StructureSchemaParser:
                 if 'origin' not in prim or 'size' not in prim:
                     errors.append(f"primitives[{i}] (box): missing 'origin' or 'size'")
             elif ptype == 'cylinder':
-                if 'center' not in prim or 'radius' not in prim or 'height' not in prim:
-                    errors.append(f"primitives[{i}] (cylinder): missing 'center', 'radius', or 'height'")
+                has_center = 'center' in prim
+                has_endpoints = 'base_center' in prim and 'top_center' in prim
+                if (not has_center and not has_endpoints) or 'radius' not in prim or 'height' not in prim:
+                    errors.append(
+                        f"primitives[{i}] (cylinder): missing 'center' or ('base_center','top_center'), "
+                        f"'radius', or 'height'"
+                    )
+                else:
+                    if has_center:
+                        center = prim['center']
+                        if not isinstance(center, (list, tuple)) or len(center) != 3:
+                            errors.append(f"primitives[{i}] (cylinder): 'center' must be a 3D point")
+                    if has_endpoints:
+                        if not isinstance(prim['base_center'], (list, tuple)) or len(prim['base_center']) != 3:
+                            errors.append(f"primitives[{i}] (cylinder): 'base_center' must be a 3D point")
+                        if not isinstance(prim['top_center'], (list, tuple)) or len(prim['top_center']) != 3:
+                            errors.append(f"primitives[{i}] (cylinder): 'top_center' must be a 3D point")
+                    if prim['radius'] <= 0:
+                        errors.append(f"primitives[{i}] (cylinder): 'radius' must be positive")
+                    if prim['height'] <= 0:
+                        errors.append(f"primitives[{i}] (cylinder): 'height' must be positive")
             elif ptype == 'polyline_extrude':
                 if 'profile' not in prim or 'height' not in prim:
                     errors.append(f"primitives[{i}] (polyline_extrude): missing 'profile' or 'height'")
+            elif ptype in ('line_segment', 'member'):
+                if 'start' not in prim or 'end' not in prim:
+                    errors.append(f"primitives[{i}] ({ptype}): missing 'start' or 'end'")
+                else:
+                    if not isinstance(prim['start'], (list, tuple)) or len(prim['start']) != 3:
+                        errors.append(f"primitives[{i}] ({ptype}): 'start' must be a 3D point")
+                    if not isinstance(prim['end'], (list, tuple)) or len(prim['end']) != 3:
+                        errors.append(f"primitives[{i}] ({ptype}): 'end' must be a 3D point")
+                    if np.allclose(prim['start'], prim['end']):
+                        errors.append(f"primitives[{i}] ({ptype}): 'start' and 'end' must be different")
+                if 'radius' in prim and prim['radius'] <= 0:
+                    errors.append(f"primitives[{i}] ({ptype}): 'radius' must be positive")
+                if 'area' in prim and prim['area'] <= 0:
+                    errors.append(f"primitives[{i}] ({ptype}): 'area' must be positive")
 
         # 检查 operations 引用完整性
         prim_ids = {p['id'] for p in primitives if 'id' in p}
@@ -194,7 +227,12 @@ class StructureSchemaParser:
             prim['size'] = [v * scale for v in prim['size']]
 
         elif ptype == 'cylinder':
-            prim['center'] = [v * scale for v in prim['center']]
+            if 'center' in prim:
+                prim['center'] = [v * scale for v in prim['center']]
+            if 'base_center' in prim:
+                prim['base_center'] = [v * scale for v in prim['base_center']]
+            if 'top_center' in prim:
+                prim['top_center'] = [v * scale for v in prim['top_center']]
             prim['radius'] = prim['radius'] * scale
             prim['height'] = prim['height'] * scale
 
@@ -204,6 +242,22 @@ class StructureSchemaParser:
             if 'z0' in prim:
                 prim['z0'] = prim['z0'] * scale
             prim['height'] = prim['height'] * scale
+
+        elif ptype in ('line_segment', 'member'):
+            prim['start'] = [v * scale for v in prim['start']]
+            prim['end'] = [v * scale for v in prim['end']]
+            if 'radius' in prim:
+                prim['radius'] = prim['radius'] * scale
+            if 'area' in prim:
+                prim['area'] = prim['area'] * scale * scale
+            if 'grout_perimeter' in prim:
+                prim['grout_perimeter'] = prim['grout_perimeter'] * scale
+            if 'moi_y' in prim:
+                prim['moi_y'] = prim['moi_y'] * scale ** 4
+            if 'moi_z' in prim:
+                prim['moi_z'] = prim['moi_z'] * scale ** 4
+            if 'moi_polar' in prim:
+                prim['moi_polar'] = prim['moi_polar'] * scale ** 4
 
     def apply_transform(self, pca_angle, centroid):
         """
@@ -263,13 +317,12 @@ class StructureSchemaParser:
             prim['size'] = [new_max[i] - new_min[i] for i in range(3)]
 
         elif ptype == 'cylinder':
-            center = prim['center']
-            height = prim['height']
-            # 变换底部中心和顶部中心
-            bottom = transform_fn(center)
-            top = transform_fn([center[0], center[1], center[2] + height])
+            bottom_raw, top_raw = self._get_cylinder_endpoints(prim)
+            bottom = transform_fn(bottom_raw)
+            top = transform_fn(top_raw)
             prim['center'] = bottom
             prim['height'] = top[2] - bottom[2]
+            prim['center_mode'] = 'base'
             # radius 不受绕 Z 轴旋转影响
 
         elif ptype == 'polyline_extrude':
@@ -283,6 +336,10 @@ class StructureSchemaParser:
             transformed_top = transform_fn([0, 0, z0 + prim['height']])
             prim['z0'] = transformed_base[2]
             prim['height'] = transformed_top[2] - transformed_base[2]
+
+        elif ptype in ('line_segment', 'member'):
+            prim['start'] = transform_fn(prim['start'])
+            prim['end'] = transform_fn(prim['end'])
 
     def parse(self):
         """执行验证后返回解析后的 primitives 和 operations。"""
@@ -309,22 +366,115 @@ class StructureSchemaParser:
             return []
         return self.schema.get('outputs', {}).get('final_objects', [])
 
+    def _get_cylinder_endpoints(self, prim):
+        height = prim['height']
+
+        if 'base_center' in prim and 'top_center' in prim:
+            return list(prim['base_center']), list(prim['top_center'])
+
+        center = prim['center']
+        center_mode = prim.get('center_mode', 'base').lower()
+
+        if center_mode in ('mid', 'middle', 'center', 'centroid'):
+            half_height = height / 2.0
+            return (
+                [center[0], center[1], center[2] - half_height],
+                [center[0], center[1], center[2] + half_height],
+            )
+
+        return list(center), [center[0], center[1], center[2] + height]
+
+    def _infer_path_a_element_type(self, prim):
+        candidates = [
+            prim.get('element_type'),
+            prim.get('structure_type'),
+            prim.get('member_type'),
+            prim.get('role'),
+            prim.get('layer'),
+        ]
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+
+            key = str(candidate).strip().lower()
+            if key in ('pile', 'piles'):
+                return 'pile'
+            if key in ('cable', 'cables', 'anchor', 'anchors', 'tieback', 'tiebacks'):
+                return 'cable'
+            if key in ('beam', 'beams', 'brace', 'braces', 'strut', 'struts'):
+                return 'beam'
+
+        return None
+
     def classify_for_path_a(self):
         """
         提取可用于 Path A（FLAC3D structure 元素）的结构定义。
-        目前支持：圆柱体（桩）→ pile 元素。
+        目前支持：
+          - cylinder + pile layer/type → pile
+          - line_segment/member + cable layer/type → cable
+          - line_segment/member + beam layer/type → beam
         返回分类后的结构列表。
         """
         piles = []
-        for prim in self.get_primitives():
-            if prim.get('type') == 'cylinder' and prim.get('layer', '').lower() in ('piles', 'pile'):
+        cables = []
+        beams = []
+        supported_ids = set()
+        final_ids = set(self.get_structure_ids())
+        primitives = self.get_primitives()
+
+        if final_ids:
+            primitives = [prim for prim in primitives if prim.get('id') in final_ids]
+
+        for prim in primitives:
+            element_type = self._infer_path_a_element_type(prim)
+
+            if prim.get('type') == 'cylinder' and element_type == 'pile':
+                bottom, top = self._get_cylinder_endpoints(prim)
                 piles.append({
                     'id': prim['id'],
                     'type': 'pile',
-                    'center_x': prim['center'][0],
-                    'center_y': prim['center'][1],
-                    'z_bottom': prim['center'][2],
-                    'z_top': prim['center'][2] + prim['height'],
+                    'center_x': bottom[0],
+                    'center_y': bottom[1],
+                    'z_bottom': bottom[2],
+                    'z_top': top[2],
                     'radius': prim['radius'],
                 })
-        return {'piles': piles}
+                supported_ids.add(prim['id'])
+
+            elif prim.get('type') in ('line_segment', 'member') and element_type == 'cable':
+                cable = {
+                    'id': prim['id'],
+                    'type': 'cable',
+                    'start': list(prim['start']),
+                    'end': list(prim['end']),
+                }
+                for key in ('area', 'radius', 'pretension', 'grout_perimeter'):
+                    if key in prim:
+                        cable[key] = prim[key]
+                cables.append(cable)
+                supported_ids.add(prim['id'])
+
+            elif prim.get('type') in ('line_segment', 'member') and element_type == 'beam':
+                beam = {
+                    'id': prim['id'],
+                    'type': 'beam',
+                    'start': list(prim['start']),
+                    'end': list(prim['end']),
+                }
+                for key in ('area', 'radius', 'moi_y', 'moi_z', 'moi_polar', 'direction_y'):
+                    if key in prim:
+                        beam[key] = prim[key]
+                beams.append(beam)
+                supported_ids.add(prim['id'])
+
+        unsupported = []
+        if final_ids:
+            unsupported = sorted(final_ids - supported_ids)
+
+        return {
+            'piles': piles,
+            'cables': cables,
+            'beams': beams,
+            'unsupported': unsupported,
+        }

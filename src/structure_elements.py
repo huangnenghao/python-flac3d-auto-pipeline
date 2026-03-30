@@ -28,6 +28,14 @@ class StructureElementGenerator:
         self._next_id += 1
         return sid
 
+    @staticmethod
+    def _fmt_num(value):
+        return f"{float(value):.12g}"
+
+    @staticmethod
+    def _segment_length(start, end):
+        return math.sqrt(sum((float(end[i]) - float(start[i])) ** 2 for i in range(3)))
+
     def generate_all(self, parsed_schema):
         """
         从解析后的 schema 生成所有 structure 元素命令。
@@ -60,10 +68,6 @@ class StructureElementGenerator:
                 cmds.extend(self.generate_beam(beam))
                 cmds.append("")
 
-        # 全局 link attach（让结构元素与 zone 网格耦合）
-        cmds.append("; --- Attach structure links to zones ---")
-        cmds.append("structure link attach slave zone")
-
         return cmds
 
     def generate_pile(self, pile_def):
@@ -84,18 +88,40 @@ class StructureElementGenerator:
         radius = pile_def['radius']
         pile_id = pile_def.get('id', f'pile_{sid}')
 
+        if radius <= 0:
+            raise ValueError(f"Pile '{pile_id}' radius must be positive, got {radius}")
+        if z_top <= z_bot:
+            raise ValueError(
+                f"Pile '{pile_id}' top elevation must be above bottom elevation, "
+                f"got z_bottom={z_bot}, z_top={z_top}"
+            )
+
         # 段数
         segments = cfg.get('segments', 20)
 
-        # 截面参数：如果 config 中有，使用 config；否则从 radius 计算
-        area = cfg.get('cross_section_area', math.pi * radius ** 2)
-        perimeter = cfg.get('perimeter', 2 * math.pi * radius)
+        use_schema_radius = cfg.get('derive_section_from_radius', True)
+
+        # 截面参数：默认根据 schema 半径推导，必要时允许 config 覆盖
+        derived_area = math.pi * radius ** 2
+        derived_perimeter = 2 * math.pi * radius
         # 圆形截面惯性矩 I = pi*r^4/4
-        moi = cfg.get('moi', math.pi * radius ** 4 / 4.0)
+        derived_moi = math.pi * radius ** 4 / 4.0
         # 极惯性矩 J = pi*r^4/2
-        polar_moi = cfg.get('polar_moi', math.pi * radius ** 4 / 2.0)
+        derived_polar_moi = math.pi * radius ** 4 / 2.0
+
+        if use_schema_radius:
+            area = derived_area
+            perimeter = derived_perimeter
+            moi = derived_moi
+            polar_moi = derived_polar_moi
+        else:
+            area = cfg.get('cross_section_area', derived_area)
+            perimeter = cfg.get('perimeter', derived_perimeter)
+            moi = cfg.get('moi', derived_moi)
+            polar_moi = cfg.get('polar_moi', derived_polar_moi)
 
         young = cfg.get('young', 3e10)
+        poisson = cfg.get('poisson', 0.2)
 
         # 耦合弹簧参数
         k_n = cfg.get('coupling_stiffness_normal', 1e8)
@@ -105,13 +131,19 @@ class StructureElementGenerator:
 
         cmds = [
             f"; Pile: {pile_id} at ({cx:.3f}, {cy:.3f}), z=[{z_bot:.3f}, {z_top:.3f}], R={radius:.3f}m",
-            f"structure pile create by-line ({cx},{cy},{z_bot}) ({cx},{cy},{z_top}) segments {segments} id {sid}",
-            f"structure pile property young {young} cross-section-area {area} "
-            f"moi {moi} perimeter {perimeter} "
-            f"coupling-stiffness-normal {k_n} coupling-stiffness-shear {k_s} "
-            f"coupling-cohesion {c_cohesion} coupling-friction {c_friction} "
+            f"structure pile create by-line ({self._fmt_num(cx)},{self._fmt_num(cy)},{self._fmt_num(z_bot)}) "
+            f"({self._fmt_num(cx)},{self._fmt_num(cy)},{self._fmt_num(z_top)}) segments {segments} id {sid}",
+            f"structure pile property young {self._fmt_num(young)} poisson {self._fmt_num(poisson)} "
+            f"cross-sectional-area {self._fmt_num(area)} "
+            f"moi-y {self._fmt_num(moi)} moi-z {self._fmt_num(moi)} "
+            f"moi-polar {self._fmt_num(polar_moi)} perimeter {self._fmt_num(perimeter)} "
+            f"coupling-stiffness-normal {self._fmt_num(k_n)} "
+            f"coupling-stiffness-shear {self._fmt_num(k_s)} "
+            f"coupling-cohesion-normal {self._fmt_num(c_cohesion)} "
+            f"coupling-cohesion-shear {self._fmt_num(c_cohesion)} "
+            f"coupling-friction-normal {self._fmt_num(c_friction)} "
+            f"coupling-friction-shear {self._fmt_num(c_friction)} "
             f"range id {sid}",
-            f"structure pile property polar-moi {polar_moi} range id {sid}",
             f"; Group pile for post-processing",
             f"structure node group '{pile_id}' range id {sid}",
         ]
@@ -133,30 +165,46 @@ class StructureElementGenerator:
         ex, ey, ez = cable_def['end']
         cable_id = cable_def.get('id', f'cable_{sid}')
 
+        if self._segment_length(cable_def['start'], cable_def['end']) <= 0:
+            raise ValueError(f"Cable '{cable_id}' start and end must be different")
+
         segments = cfg.get('segments', 10)
         young = cfg.get('young', 2e11)  # 钢材默认
-        area = cable_def.get('area', cfg.get('cross_section_area', 0.001))  # m^2
+        if 'area' in cable_def:
+            area = cable_def['area']
+        elif 'radius' in cable_def:
+            area = math.pi * cable_def['radius'] ** 2
+        else:
+            area = cfg.get('cross_section_area', 0.001)
+        if area <= 0:
+            raise ValueError(f"Cable '{cable_id}' cross-sectional area must be positive, got {area}")
 
         # 锚固参数
         grout_stiffness = cfg.get('grout_stiffness', 1e8)
         grout_cohesion = cfg.get('grout_cohesion', 1e5)
         grout_friction = cfg.get('grout_friction', 30.0)
-        grout_perimeter = cfg.get('grout_perimeter', 0.2)
+        grout_perimeter = cable_def.get('grout_perimeter', cfg.get('grout_perimeter', 0.2))
 
         # 预应力
         pretension = cable_def.get('pretension', cfg.get('pretension', 0))
 
         cmds = [
             f"; Cable: {cable_id}",
-            f"structure cable create by-line ({sx},{sy},{sz}) ({ex},{ey},{ez}) segments {segments} id {sid}",
-            f"structure cable property young {young} cross-section-area {area} "
-            f"grout-stiffness {grout_stiffness} grout-cohesion {grout_cohesion} "
-            f"grout-friction {grout_friction} grout-perimeter {grout_perimeter} "
+            f"structure cable create by-line ({self._fmt_num(sx)},{self._fmt_num(sy)},{self._fmt_num(sz)}) "
+            f"({self._fmt_num(ex)},{self._fmt_num(ey)},{self._fmt_num(ez)}) segments {segments} id {sid}",
+            f"structure cable property young {self._fmt_num(young)} "
+            f"cross-sectional-area {self._fmt_num(area)} "
+            f"grout-stiffness {self._fmt_num(grout_stiffness)} "
+            f"grout-cohesion {self._fmt_num(grout_cohesion)} "
+            f"grout-friction {self._fmt_num(grout_friction)} "
+            f"grout-perimeter {self._fmt_num(grout_perimeter)} "
             f"range id {sid}",
         ]
 
         if pretension > 0:
-            cmds.append(f"structure cable apply tension {pretension} range id {sid}")
+            cmds.append(
+                f"structure cable apply tension value {self._fmt_num(pretension)} range id {sid}"
+            )
 
         cmds.append(f"structure node group '{cable_id}' range id {sid}")
 
@@ -177,18 +225,38 @@ class StructureElementGenerator:
         ex, ey, ez = beam_def['end']
         beam_id = beam_def.get('id', f'beam_{sid}')
 
+        if self._segment_length(beam_def['start'], beam_def['end']) <= 0:
+            raise ValueError(f"Beam '{beam_id}' start and end must be different")
+
         segments = cfg.get('segments', 10)
-        young = cfg.get('young', 3e10)
-        poisson = cfg.get('poisson', 0.2)
-        area = cfg.get('cross_section_area', 0.25)  # m^2
-        moi = cfg.get('moi', 0.005)  # m^4
-        polar_moi = cfg.get('polar_moi', 0.01)
+        young = beam_def.get('young', cfg.get('young', 3e10))
+        poisson = beam_def.get('poisson', cfg.get('poisson', 0.2))
+
+        if 'radius' in beam_def:
+            derived_area = math.pi * beam_def['radius'] ** 2
+            derived_moi = math.pi * beam_def['radius'] ** 4 / 4.0
+            derived_polar_moi = math.pi * beam_def['radius'] ** 4 / 2.0
+        else:
+            derived_area = cfg.get('cross_section_area', 0.25)
+            derived_moi = cfg.get('moi_y', cfg.get('moi', 0.005))
+            derived_polar_moi = cfg.get('moi_polar', cfg.get('polar_moi', 0.01))
+
+        area = beam_def.get('area', cfg.get('cross_section_area', derived_area) if 'radius' not in beam_def else derived_area)
+        moi_y = beam_def.get('moi_y', cfg.get('moi_y', cfg.get('moi', derived_moi)) if 'radius' not in beam_def else derived_moi)
+        moi_z = beam_def.get('moi_z', cfg.get('moi_z', cfg.get('moi', derived_moi)) if 'radius' not in beam_def else derived_moi)
+        polar_moi = beam_def.get('moi_polar', cfg.get('moi_polar', cfg.get('polar_moi', derived_polar_moi)) if 'radius' not in beam_def else derived_polar_moi)
+
+        if area <= 0 or moi_y <= 0 or moi_z <= 0 or polar_moi < 0:
+            raise ValueError(f"Beam '{beam_id}' has invalid section properties")
 
         cmds = [
             f"; Beam: {beam_id}",
-            f"structure beam create by-line ({sx},{sy},{sz}) ({ex},{ey},{ez}) segments {segments} id {sid}",
-            f"structure beam property young {young} poisson {poisson} "
-            f"cross-section-area {area} moi {moi} polar-moi {polar_moi} "
+            f"structure beam create by-line ({self._fmt_num(sx)},{self._fmt_num(sy)},{self._fmt_num(sz)}) "
+            f"({self._fmt_num(ex)},{self._fmt_num(ey)},{self._fmt_num(ez)}) segments {segments} id {sid}",
+            f"structure beam property young {self._fmt_num(young)} poisson {self._fmt_num(poisson)} "
+            f"cross-sectional-area {self._fmt_num(area)} "
+            f"moi-y {self._fmt_num(moi_y)} moi-z {self._fmt_num(moi_z)} "
+            f"moi-polar {self._fmt_num(polar_moi)} "
             f"range id {sid}",
             f"structure node group '{beam_id}' range id {sid}",
         ]

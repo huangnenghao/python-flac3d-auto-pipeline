@@ -1,0 +1,83 @@
+{
+  "meta": {
+    "unit": "m",
+    "confidence": 0.9,
+    "description": "Path A 混合结构示例：抗滑桩 + 顶部系梁 + 锚索",
+    "assumptions": [
+      "5 根抗滑桩与原测试工况一致",
+      "1 根系梁连接两端桩顶",
+      "1 根锚索从中部桩顶斜向锚入坡体"
+    ]
+  },
+  "primitives": [
+    {
+      "id": "pile_1",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380933.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_2",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380937.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_3",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380941.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_4",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380945.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_5",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380949.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "beam_cap_1",
+      "type": "line_segment",
+      "layer": "beam",
+      "start": [380933.0, 2835468.0, 349.5],
+      "end": [380949.0, 2835468.0, 349.5],
+      "radius": 0.25
+    },
+    {
+      "id": "anchor_1",
+      "type": "line_segment",
+      "layer": "cable",
+      "start": [380941.0, 2835468.0, 349.5],
+      "end": [380956.0, 2835460.0, 344.0],
+      "radius": 0.02,
+      "pretension": 100000.0
+    }
+  ],
+  "operations": [],
+  "outputs": {
+    "final_objects": [
+      "pile_1",
+      "pile_2",
+      "pile_3",
+      "pile_4",
+      "pile_5",
+      "beam_cap_1",
+      "anchor_1"
+    ]
+  }
+}

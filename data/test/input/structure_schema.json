@@ -1,0 +1,58 @@
+{
+  "meta": {
+    "unit": "m",
+    "confidence": 0.9,
+    "description": "抗滑桩方案 - 5根圆形截面桩，横跨坡体中部",
+    "assumptions": [
+      "桩径1.5m，桩长15m",
+      "桩间距4m，单排布置",
+      "桩顶与地表齐平（约350m标高），桩底入岩"
+    ]
+  },
+  "primitives": [
+    {
+      "id": "pile_1",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380933.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_2",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380937.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_3",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380941.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_4",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380945.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    },
+    {
+      "id": "pile_5",
+      "type": "cylinder",
+      "layer": "piles",
+      "center": [380949.0, 2835468.0, 335.0],
+      "radius": 0.75,
+      "height": 15.0
+    }
+  ],
+  "operations": [],
+  "outputs": {
+    "final_objects": ["pile_1", "pile_2", "pile_3", "pile_4", "pile_5"]
+  }
+}
