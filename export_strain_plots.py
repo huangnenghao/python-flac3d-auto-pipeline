@@ -11,8 +11,8 @@ def main():
     # 1. Configuration
     # Adjust these paths if necessary
     project_dir = r"d:\2026.03 FLAC3D Code-Native"
-    data_dir = r"d:\2026.03 FLAC3D Code-Native\data\longrongrelia\output"
-    output_plot_dir = os.path.join(project_dir, "data", "longrongrelia", "plots")
+    data_dir = r"d:\2026.03 FLAC3D Code-Native\data\longrong3_after_treatment_relia_100sim\output"
+    output_plot_dir = os.path.join(project_dir, "data", "longrong3_after_treatment_relia_100sim", "plots-shear-rightside")
     
     # Ensure output directory exists
     if not os.path.exists(output_plot_dir):

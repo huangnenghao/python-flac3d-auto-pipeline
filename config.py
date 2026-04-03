@@ -27,9 +27,9 @@ Z_SCALE = 1.0          # 高程缩放
 STL_FILENAME = 'terrain_surface.stl'
 
 # FLAC3D 网格配置
-MESH_RES_X = 3     # FLAC3D 初始网格 X 方向尺寸
-MESH_RES_Y = 3      # FLAC3D 初始网格 Y 方向尺寸
-MESH_RES_Z = 4     # FLAC3D 初始网格 Z 方向尺寸
+MESH_RES_X = 4     # FLAC3D 初始网格 X 方向尺寸
+MESH_RES_Y = 4     # FLAC3D 初始网格 Y 方向尺寸
+MESH_RES_Z = 2    # FLAC3D 初始网格 Z 方向尺寸
 MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离 (建议足够深以容纳所有地层)
 
 # 地层结构定义 (从上往下)
@@ -42,23 +42,31 @@ MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离
 #   scale_v  : 垂直相关长度 (m)
 LAYERS = [
     {
-        "name": "gravel_soil",  # 第四系全新统残坡积层（碎石土）
-        "thickness": 3.0,       # 资料显示 1~5m，取均值 3m (较上一个项目薄)
+        "name": "silty_clay",           # 修正为“粉质黏土”（含碎石/砾），与报告描述一致 [cite: 1160, 1334]
+        "thickness": 3.0,               # 报告显示残坡积层厚度 0.8~5m [cite: 1161]，取 3.0m 为合理均值
         "mat_props": {
-            "density": 2000.0, "young": 3e7, "poisson": 0.35,
-            "cohesion": 20e3, "friction": 30.0, "tension": 0.0,
-            # 随机场参数：碎石土由于局部夹块石，变异性较大
+            "density": 1900.0,          # 粉质黏土典型值（报告未明确给出土层密度）
+            "young": 3e7, 
+            "poisson": 0.35,
+            "cohesion": 18e3,           # 修正：报告给出 $c$ 值在 12~25 kPa 之间 
+            "friction": 15.0,           # 修正：报告给出 $\phi$ 值在 10~20° 之间 
+            "tension": 0.0,
+            # 随机场参数：由于土层厚度不均且含碎石，保持较高的变异系数
             "c_cov": 0.35, "phi_cov": 0.20,
             "scale_h": 10.0, "scale_v": 1.0,
         }
     },
     {
-        "name": "sandstone_bedrock", # 远古界合桐组（砂岩/板岩基岩）
-        "thickness": None,           # 剩余部分全部为基岩
+        "name": "weathered_bedrock",    # 修正：主要为元古界合桐组的“千枚岩、板岩夹粉砂岩” [cite: 1164, 1229]
+        "thickness": None, 
         "mat_props": {
-            "density": 2500.0, "young": 1.5e9, "poisson": 0.28,
-            "cohesion": 250e3, "friction": 38.0, "tension": 40e3,
-            # 随机场参数：基岩相对均匀，但裂隙发育导致一定变异性
+            "density": 2250.0,          # 修正：报告给出强风化层密度为 2.2~2.3 g/cm³ 
+            "young": 1.5e9, 
+            "poisson": 0.28,
+            "cohesion": 250e3,          # 强风化岩组强度参考值
+            "friction": 35.0,           # 考虑到千枚岩、板岩具薄层结构且易泥化，略微调低内摩擦角 [cite: 1230, 1235]
+            "tension": 40e3,
+            # 报告提到强风化层饱和抗压强度为 15.4~28.6 MPa 
             "c_cov": 0.20, "phi_cov": 0.15,
             "scale_h": 30.0, "scale_v": 3.0,
         }
@@ -73,7 +81,7 @@ SOLVE_FOS_RATIO = 1e-4
 # ============================================================
 # 随机场 & 可靠度分析参数 (Monte Carlo)
 # ============================================================
-RF_ENABLED = False     # 是否在 FOS 计算后自动执行可靠度分析
+RF_ENABLED = True     # 是否在 FOS 计算后自动执行可靠度分析
 RF_NSIM    = 100       # Monte Carlo 模拟次数
 RF_ACF     = 1         # 自相关函数类型:
                        #   1 = 单指数 (Single Exponential)
@@ -86,15 +94,16 @@ RF_RXY     = -0.5      # c 与 phi 之间的互相关系数 (负值表示负相�
 # ============================================================
 # 结构-地层相互作用 (SSI) 配置
 # ============================================================
-SSI_ENABLED = True          # 是否启用结构体建模
+SSI_ENABLED = False        # 是否启用结构体建模
 SSI_PATH = 'A'              # 'A' = FLAC3D structure 元素, 'B' = Gmsh 实体 zone
 SSI_SCHEMA_PATH = None      # LLM 生成的结构 schema 文件路径 (.json 或 .py)
                             # 若为 None，则在项目 input 目录查找 structure_schema.json
 SSI_STRICT = True
-MAIN_TIF_PATH = r"d:\2026.03 FLAC3D Code-Native\data\test\input\DEM.tif"
-MAIN_PROJECT_NAME = "test0330"
+MAIN_TIF_PATH = r"d:\2026.03 FLAC3D Code-Native\data\longrong3_after_treatment\input\DEM.tif"
+MAIN_PROJECT_NAME = "longrong3_after_treatment_relia_100sim"
 MAIN_NON_INTERACTIVE = False
 MAIN_AUTO_START_RELIABILITY = None
+EXPORT_CONFIG_MARKDOWN = True
 
 # --- Path A: FLAC3D Structure 元素参数 ---
 STRUCTURE_ELEMENTS = {

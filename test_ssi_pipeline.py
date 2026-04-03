@@ -86,6 +86,8 @@ for p in classified['piles']:
           f"r={p['radius']:.2f}")
 
 from src.structure_elements import StructureElementGenerator
+from src.flac3d_runner import Flac3DRunner
+from src.path_a_geometry import validate_path_a_geometry
 gen = StructureElementGenerator(config)
 cmds = gen.generate_all(classified)
 pile_cmd = next(cmd for cmd in cmds if cmd.startswith("structure pile property "))
@@ -126,6 +128,7 @@ n_piles_mixed = len(classified_mixed.get('piles', []))
 n_cables_mixed = len(classified_mixed.get('cables', []))
 n_beams_mixed = len(classified_mixed.get('beams', []))
 unsupported_mixed = classified_mixed.get('unsupported', [])
+geometry_errors_mixed = validate_path_a_geometry(classified_mixed, builder.mesh.vertices, bounds)
 
 print(f"  Classified: piles={n_piles_mixed}, cables={n_cables_mixed}, beams={n_beams_mixed}")
 print(f"  Unsupported finals: {unsupported_mixed}")
@@ -134,11 +137,13 @@ assert n_piles_mixed == 5, f"Expected 5 piles, got {n_piles_mixed}"
 assert n_cables_mixed == 1, f"Expected 1 cable, got {n_cables_mixed}"
 assert n_beams_mixed == 1, f"Expected 1 beam, got {n_beams_mixed}"
 assert not unsupported_mixed, f"Expected no unsupported final objects, got {unsupported_mixed}"
+assert not geometry_errors_mixed, f"Expected embedded cable geometry, got {geometry_errors_mixed}"
 
 mixed_cmds = gen.generate_all(classified_mixed)
 cable_cmd = next(cmd for cmd in mixed_cmds if cmd.startswith("structure cable property "))
 beam_cmd = next(cmd for cmd in mixed_cmds if cmd.startswith("structure beam property "))
 cable_apply_cmd = next(cmd for cmd in mixed_cmds if cmd.startswith("structure cable apply tension "))
+release_cmds = Flac3DRunner()._build_structure_release_cmds(mixed_cmds)
 
 expected_cable_area = math.pi * classified_mixed['cables'][0]['radius'] ** 2
 expected_beam_area = math.pi * classified_mixed['beams'][0]['radius'] ** 2
@@ -150,6 +155,7 @@ assert "grout-stiffness" in cable_cmd and "grout-cohesion" in cable_cmd
 assert f"cross-sectional-area {expected_cable_area:.12g}" in cable_cmd
 assert "value" in cable_apply_cmd
 assert "100000" in cable_apply_cmd
+assert release_cmds == ["structure cable apply tension active off range id 6"]
 
 assert "cross-sectional-area" in beam_cmd
 assert "moi-y" in beam_cmd and "moi-z" in beam_cmd and "moi-polar" in beam_cmd

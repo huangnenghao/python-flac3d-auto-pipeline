@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import time
 import sys
@@ -8,6 +9,26 @@ import numpy as np
 class Flac3DRunner:
     def __init__(self):
         self.script_lines = []
+
+    def _build_structure_release_cmds(self, structure_cmds):
+        release_cmds = []
+        if not structure_cmds:
+            return release_cmds
+
+        pattern = re.compile(
+            r"^structure cable apply tension value\s+.+?\s+range\s+(.+)$",
+            re.IGNORECASE
+        )
+
+        for cmd in structure_cmds:
+            line = cmd.strip()
+            match = pattern.match(line)
+            if match:
+                release_cmds.append(
+                    f"structure cable apply tension active off range {match.group(1)}"
+                )
+
+        return release_cmds
 
     def run_analysis_sequence(self, stl_path, save_path, bounds, config, run_fos=True,
                               structure_cmds=None, mesh_import_path=None):
@@ -185,6 +206,7 @@ class Flac3DRunner:
                 cmds.append(f"zone property {prop_str} range group '{l_name}'")
 
         # 注入 structure 元素命令 (Path A)
+        release_structure_cmds = self._build_structure_release_cmds(structure_cmds)
         if structure_cmds:
             cmds.append("")
             cmds.extend(structure_cmds)
@@ -220,7 +242,16 @@ class Flac3DRunner:
             f"; --- Initial Equilibrium (Elastic) ---",
             f"model gravity 0 0 {config.GRAVITY_Z}",
             f"model solve elastic ratio {config.SOLVE_ELASTIC_RATIO}",
+        ])
 
+        if release_structure_cmds:
+            cmds.extend([
+                f"; --- Release Pretension Control Before FOS/Balanced Save ---",
+                *release_structure_cmds,
+                f"model solve elastic ratio {config.SOLVE_ELASTIC_RATIO}",
+            ])
+
+        cmds.extend([
             f"; --- Save Balanced State ---",
             f"model save '{balanced_sav_path}'",
         ])

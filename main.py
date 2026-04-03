@@ -1,8 +1,8 @@
 import argparse
+import datetime
 import os
 import shutil
 import traceback
-import numpy as np
 import config
 import tkinter as tk
 from tkinter import filedialog
@@ -105,8 +105,107 @@ def write_path_a_commands(output_dir, structure_cmds):
     return commands_path
 
 
+def format_timestamp_suffix(dt):
+    return dt.strftime("%Y%m%d_%H%M%S")
+
+
+def write_project_config_markdown(input_dir, runtime_timestamp, project_name, selected_tif_path,
+                                  runtime_options, bounds=None, schema_path=None, classified=None):
+    if not getattr(config, 'EXPORT_CONFIG_MARKDOWN', True):
+        return None
+
+    timestamp_suffix = format_timestamp_suffix(runtime_timestamp)
+    markdown_path = os.path.join(input_dir, f"project_config_{timestamp_suffix}.md")
+
+    structure_summary = {
+        'piles': len((classified or {}).get('piles', [])),
+        'cables': len((classified or {}).get('cables', [])),
+        'beams': len((classified or {}).get('beams', [])),
+        'unsupported': (classified or {}).get('unsupported', []),
+    }
+
+    lines = [
+        f"# Project Config Snapshot - {project_name}",
+        "",
+        f"- Runtime: {runtime_timestamp.isoformat(timespec='seconds')}",
+        f"- Project: {project_name}",
+        f"- Selected TIF: {selected_tif_path}",
+        f"- Non-interactive: {runtime_options['non_interactive']}",
+        "",
+        "## Core Config",
+        "",
+        f"- DOWNSAMPLE_FACTOR: {config.DOWNSAMPLE_FACTOR}",
+        f"- Z_SCALE: {config.Z_SCALE}",
+        f"- STL_FILENAME: {config.STL_FILENAME}",
+        f"- RF_ENABLED: {config.RF_ENABLED}",
+        f"- SSI_ENABLED: {config.SSI_ENABLED}",
+        f"- SSI_PATH: {config.SSI_PATH}",
+        f"- SSI_STRICT: {getattr(config, 'SSI_STRICT', True)}",
+        "",
+        "## Mesh Config",
+        "",
+        f"- MESH_RES_X: {config.MESH_RES_X}",
+        f"- MESH_RES_Y: {config.MESH_RES_Y}",
+        f"- MESH_RES_Z: {config.MESH_RES_Z}",
+        f"- MODEL_BOT_OFFSET: {config.MODEL_BOT_OFFSET}",
+        "",
+        "## Paths",
+        "",
+        f"- MAIN_TIF_PATH: {getattr(config, 'MAIN_TIF_PATH', None)}",
+        f"- MAIN_PROJECT_NAME: {getattr(config, 'MAIN_PROJECT_NAME', None)}",
+        f"- SSI_SCHEMA_PATH: {schema_path or getattr(config, 'SSI_SCHEMA_PATH', None)}",
+        "",
+        "## Layers",
+        "",
+    ]
+
+    for index, layer in enumerate(getattr(config, 'LAYERS', []), start=1):
+        props = layer.get('mat_props', {})
+        lines.extend([
+            f"### Layer {index}: {layer.get('name', 'unknown')}",
+            "",
+            f"- thickness: {layer.get('thickness', None)}",
+            f"- density: {props.get('density', None)}",
+            f"- young: {props.get('young', None)}",
+            f"- poisson: {props.get('poisson', None)}",
+            f"- cohesion: {props.get('cohesion', None)}",
+            f"- friction: {props.get('friction', None)}",
+            f"- tension: {props.get('tension', None)}",
+            "",
+        ])
+
+    lines.extend([
+        "## Structure Summary",
+        "",
+        f"- piles: {structure_summary['piles']}",
+        f"- cables: {structure_summary['cables']}",
+        f"- beams: {structure_summary['beams']}",
+        f"- unsupported: {structure_summary['unsupported']}",
+        "",
+    ])
+
+    if bounds:
+        lines.extend([
+            "## Terrain Bounds",
+            "",
+            f"- xmin: {bounds[0]}",
+            f"- xmax: {bounds[1]}",
+            f"- ymin: {bounds[2]}",
+            f"- ymax: {bounds[3]}",
+            f"- zmin: {bounds[4]}",
+            f"- zmax: {bounds[5]}",
+            "",
+        ])
+
+    with open(markdown_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+
+    return markdown_path
+
+
 def main(argv=None):
     print("=== SlopeRA3D: TIF to FLAC3D Pipeline ===")
+    runtime_timestamp = datetime.datetime.now()
 
     args = parse_args(argv)
     runtime_options = resolve_runtime_options(args)
@@ -183,6 +282,8 @@ def main(argv=None):
 
     structure_cmds = None
     mesh_import_path = None
+    schema_path = None
+    classified = None
     ssi_enabled = getattr(config, 'SSI_ENABLED', False)
     ssi_path = getattr(config, 'SSI_PATH', 'A')
     ssi_strict = getattr(config, 'SSI_STRICT', True)
@@ -223,12 +324,16 @@ def main(argv=None):
                 n_beams = len(classified.get('beams', []))
                 n_supported = n_piles + n_cables + n_beams
                 unsupported = classified.get('unsupported', [])
+                from src.path_a_geometry import validate_path_a_geometry
+                geometry_errors = validate_path_a_geometry(classified, builder.mesh.vertices, bounds)
 
                 if unsupported:
                     message = f"Path A has unsupported final objects: {unsupported}"
                     if ssi_strict:
                         raise ValueError(message)
                     print(f"  [Path A] {message}")
+                if geometry_errors:
+                    raise ValueError("\n".join(geometry_errors))
                 if n_supported == 0:
                     raise ValueError(
                         "Path A did not classify any supported structure elements. "
@@ -305,6 +410,19 @@ def main(argv=None):
     except Exception as e:
         print(f"  [Error] Unexpected error during FLAC3D invocation: {e}")
         return False
+
+    config_md_path = write_project_config_markdown(
+        input_dir=input_dir,
+        runtime_timestamp=runtime_timestamp,
+        project_name=project_name,
+        selected_tif_path=selected_tif_path,
+        runtime_options=runtime_options,
+        bounds=bounds,
+        schema_path=schema_path,
+        classified=classified,
+    )
+    if config_md_path:
+        print(f"  [Info] Project config snapshot saved to: {config_md_path}")
 
     print(f"\n[Pipeline] step3_success={step3_success}, RF_ENABLED={getattr(config, 'RF_ENABLED', False)}")
     if step3_success and getattr(config, 'RF_ENABLED', False):
