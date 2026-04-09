@@ -15,6 +15,9 @@ class SurfaceBuilder:
         # PCA 变换参数（build_mesh 后可用，供结构坐标对齐使用）
         self.pca_angle = 0.0    # 主轴与 X 轴夹角（弧度）
         self.centroid = np.array([0.0, 0.0, 0.0])  # 变换前的质心
+        self.transformed_x = None
+        self.transformed_y = None
+        self.transformed_z = None
 
     def build_mesh(self):
         """
@@ -99,6 +102,11 @@ class SurfaceBuilder:
         print(f"    Y: {self.mesh.bounds[0][1]:.2f} ~ {self.mesh.bounds[1][1]:.2f}")
         print(f"    Z: {self.mesh.bounds[0][2]:.2f} ~ {self.mesh.bounds[1][2]:.2f}")
 
+    def get_transformed_grids(self):
+        if self.transformed_x is None or self.transformed_y is None or self.transformed_z is None:
+            raise ValueError("Transformed grids are not ready. Call build_mesh() first.")
+        return self.transformed_x, self.transformed_y, self.transformed_z
+
     def _apply_pca_alignment(self, mesh):
         """
         对网格进行 PCA 分析，将其旋转使得最大方差方向对齐 X 轴，并移动到原点
@@ -158,6 +166,23 @@ class SurfaceBuilder:
         T = np.eye(4)
         T[:3, :3] = R
         mesh.apply_transform(T)
+
+        # 记录同坐标系的规则地形网格，供 Path B 体建模使用
+        z_shape = self.z.shape
+        x_grid = np.asarray(self.x, dtype=float)
+        y_grid = np.asarray(self.y, dtype=float)
+        z_grid = np.asarray(self.z, dtype=float)
+        if x_grid.ndim == 1 and x_grid.size == z_grid.size:
+            x_grid = x_grid.reshape(z_shape)
+        if y_grid.ndim == 1 and y_grid.size == z_grid.size:
+            y_grid = y_grid.reshape(z_shape)
+        points = np.column_stack((x_grid.reshape(-1), y_grid.reshape(-1), z_grid.reshape(-1)))
+        points -= centroid
+        points = points @ R.T
+        points = points.reshape((-1, 3))
+        self.transformed_x = points[:, 0].reshape(z_shape)
+        self.transformed_y = points[:, 1].reshape(z_shape)
+        self.transformed_z = points[:, 2].reshape(z_shape)
         
         # 4. 再次微调 Z 轴位置 (可选)
         # 让最低点位于 z=0，或者 z_min 保持原样？

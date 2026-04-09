@@ -231,14 +231,28 @@ class Flac3DRunner:
 
         # 继续添加剩余命令
         balanced_sav_path = safe_save_path_base.replace('model.sav', 'model_balanced.sav').replace('model_final.sav', 'model_balanced.sav')
-        cmds.extend([
-            f"; --- Boundary Conditions ---",
-            f"zone face apply velocity-z 0 range position-z {b_zmin}",
-            f"zone face apply velocity-x 0 range position-x {x_min_mesh}",
-            f"zone face apply velocity-x 0 range position-x {x_max_mesh}",
-            f"zone face apply velocity-y 0 range position-y {y_min_mesh}",
-            f"zone face apply velocity-y 0 range position-y {y_max_mesh}",
+        boundary_cmds = [f"; --- Boundary Conditions ---"]
+        if mesh_import_path:
+            # Path B 导入的是非结构化四面体网格，不能再依赖精确坐标命中边界面。
+            # 先用 skin 对外表面自动分组，再按方位组施加约束。
+            boundary_cmds.extend([
+                "zone face skin",
+                "zone face apply velocity-z 0 range group 'Bottom' slot 'skin'",
+                "zone face apply velocity-x 0 range group 'West' slot 'skin'",
+                "zone face apply velocity-x 0 range group 'East' slot 'skin'",
+                "zone face apply velocity-y 0 range group 'South' slot 'skin'",
+                "zone face apply velocity-y 0 range group 'North' slot 'skin'",
+            ])
+        else:
+            boundary_cmds.extend([
+                f"zone face apply velocity-z 0 range position-z {b_zmin}",
+                f"zone face apply velocity-x 0 range position-x {x_min_mesh}",
+                f"zone face apply velocity-x 0 range position-x {x_max_mesh}",
+                f"zone face apply velocity-y 0 range position-y {y_min_mesh}",
+                f"zone face apply velocity-y 0 range position-y {y_max_mesh}",
+            ])
 
+        cmds.extend(boundary_cmds + [
             f"; --- Initial Equilibrium (Elastic) ---",
             f"model gravity 0 0 {config.GRAVITY_Z}",
             f"model solve elastic ratio {config.SOLVE_ELASTIC_RATIO}",

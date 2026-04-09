@@ -31,7 +31,7 @@ class GmshMesher:
     """Gmsh OpenCASCADE 内核的联合建模与网格生成器。"""
 
     def __init__(self, stl_path, bounds, schema_primitives, schema_operations,
-                 layers_config, gmsh_config, structure_final_ids=None):
+                 layers_config, gmsh_config, structure_final_ids=None, terrain_grid=None):
         """
         :param stl_path: 地形 STL 文件路径
         :param bounds: (xmin, xmax, ymin, ymax, zmin, zmax) 地形包围盒
@@ -51,11 +51,16 @@ class GmshMesher:
         self.operations = schema_operations
         self.layers_config = layers_config
         self.structure_final_ids = structure_final_ids or []
+        self.terrain_grid = terrain_grid
 
         self.mesh_size_terrain = gmsh_config.get('mesh_size_terrain', 2.0)
         self.mesh_size_structure = gmsh_config.get('mesh_size_structure', 0.5)
         self.mesh_algorithm = gmsh_config.get('algorithm', 6)
         self.optimize = gmsh_config.get('optimize', True)
+        self.terrain_grid_max_points = int(gmsh_config.get('terrain_grid_max_points', 5000))
+        self.structure_dist_min = float(gmsh_config.get('structure_dist_min', 0.0))
+        self.structure_dist_max = float(gmsh_config.get('structure_dist_max', max(self.mesh_size_terrain, self.mesh_size_structure * 2.0)))
+        self.cylinder_sides = max(6, int(gmsh_config.get('cylinder_sides', 8)))
 
         # OCC dimTag 映射
         self._prim_tags = {}      # primitive_id -> (dim, tag)
@@ -69,6 +74,170 @@ class GmshMesher:
         self.elements = None      # (M, 4) 四面体连接
         self.element_ids = None   # (M,) 单元编号
         self.element_groups = None  # (M,) 分组名称
+        self.debug_info = {
+            'terrain_volume_mode': 'box',
+            'fragment_counts': {'terrain': 0, 'structure': 0},
+            'physical_groups': {},
+            'terrain_grid_shape': None,
+            'mesh_settings': {},
+        }
+
+    def _build_terrain_volume_from_grid(self):
+        x_grid, y_grid, z_grid = self.terrain_grid
+        x_grid = np.asarray(x_grid, dtype=float)
+        y_grid = np.asarray(y_grid, dtype=float)
+        z_grid = np.asarray(z_grid, dtype=float)
+
+        if z_grid.ndim != 2:
+            raise ValueError("terrain_grid z must be a 2D array")
+        if x_grid.ndim == 1 and x_grid.size == z_grid.size:
+            x_grid = x_grid.reshape(z_grid.shape)
+        if y_grid.ndim == 1 and y_grid.size == z_grid.size:
+            y_grid = y_grid.reshape(z_grid.shape)
+        if x_grid.ndim != 2 or y_grid.ndim != 2:
+            raise ValueError("terrain_grid x/y must be 2D arrays or flat arrays matching z size")
+        if x_grid.shape != y_grid.shape or x_grid.shape != z_grid.shape:
+            raise ValueError("terrain_grid x/y/z must have identical shapes")
+
+        n_rows, n_cols = z_grid.shape
+        if n_rows < 2 or n_cols < 2:
+            raise ValueError("terrain_grid is too small to build a terrain surface")
+        original_shape = (n_rows, n_cols)
+        total_points = n_rows * n_cols
+        stride = 1
+        if self.terrain_grid_max_points > 0 and total_points > self.terrain_grid_max_points:
+            stride = int(np.ceil(np.sqrt(total_points / float(self.terrain_grid_max_points))))
+            x_grid = x_grid[::stride, ::stride]
+            y_grid = y_grid[::stride, ::stride]
+            z_grid = z_grid[::stride, ::stride]
+            if x_grid.shape[0] < 2 or x_grid.shape[1] < 2:
+                raise ValueError("terrain_grid downsampling made the grid too small")
+            n_rows, n_cols = z_grid.shape
+            print(
+                f"  [Path B] Downsampling terrain grid for Gmsh volume: "
+                f"{original_shape[0]}x{original_shape[1]} -> {n_rows}x{n_cols} (stride={stride})"
+            )
+
+        _, _, _, _, zmin_topo, zmax_topo = self.bounds
+        z_bottom = zmin_topo - 10.0
+        top_points = []
+        bottom_points = []
+        for row in range(n_rows):
+            top_row = []
+            bottom_row = []
+            for col in range(n_cols):
+                x = float(x_grid[row, col])
+                y = float(y_grid[row, col])
+                top_row.append(gmsh.model.occ.addPoint(x, y, float(z_grid[row, col])))
+                bottom_row.append(gmsh.model.occ.addPoint(x, y, float(z_bottom)))
+            top_points.append(top_row)
+            bottom_points.append(bottom_row)
+
+        line_cache = {}
+
+        def get_line(a, b):
+            key = (a, b)
+            if key in line_cache:
+                return line_cache[key]
+            rev_key = (b, a)
+            if rev_key in line_cache:
+                return -line_cache[rev_key]
+            tag = gmsh.model.occ.addLine(a, b)
+            line_cache[key] = tag
+            return tag
+
+        def add_triangle_surface(a, b, c):
+            loop = gmsh.model.occ.addCurveLoop([
+                get_line(a, b),
+                get_line(b, c),
+                get_line(c, a),
+            ])
+            return gmsh.model.occ.addPlaneSurface([loop])
+
+        def add_quad_surface(a, b, c, d):
+            loop = gmsh.model.occ.addCurveLoop([
+                get_line(a, b),
+                get_line(b, c),
+                get_line(c, d),
+                get_line(d, a),
+            ])
+            return gmsh.model.occ.addPlaneSurface([loop])
+
+        surface_tags = []
+
+        for row in range(n_rows - 1):
+            for col in range(n_cols - 1):
+                p00 = top_points[row][col]
+                p01 = top_points[row][col + 1]
+                p10 = top_points[row + 1][col]
+                p11 = top_points[row + 1][col + 1]
+                surface_tags.append(add_triangle_surface(p00, p01, p11))
+                surface_tags.append(add_triangle_surface(p00, p11, p10))
+
+                b00 = bottom_points[row][col]
+                b01 = bottom_points[row][col + 1]
+                b10 = bottom_points[row + 1][col]
+                b11 = bottom_points[row + 1][col + 1]
+                surface_tags.append(add_triangle_surface(b00, b11, b01))
+                surface_tags.append(add_triangle_surface(b00, b10, b11))
+
+        for col in range(n_cols - 1):
+            surface_tags.append(add_quad_surface(
+                top_points[0][col], top_points[0][col + 1],
+                bottom_points[0][col + 1], bottom_points[0][col]
+            ))
+            surface_tags.append(add_quad_surface(
+                top_points[n_rows - 1][col], bottom_points[n_rows - 1][col],
+                bottom_points[n_rows - 1][col + 1], top_points[n_rows - 1][col + 1]
+            ))
+
+        for row in range(n_rows - 1):
+            surface_tags.append(add_quad_surface(
+                top_points[row][0], bottom_points[row][0],
+                bottom_points[row + 1][0], top_points[row + 1][0]
+            ))
+            surface_tags.append(add_quad_surface(
+                top_points[row][n_cols - 1], top_points[row + 1][n_cols - 1],
+                bottom_points[row + 1][n_cols - 1], bottom_points[row][n_cols - 1]
+            ))
+
+        gmsh.model.occ.synchronize()
+        shell_tag = gmsh.model.occ.addSurfaceLoop(surface_tags)
+        volume_tag = gmsh.model.occ.addVolume([shell_tag])
+        gmsh.model.occ.synchronize()
+
+        self._terrain_volumes = [(3, volume_tag)]
+        self.debug_info['terrain_volume_mode'] = 'terrain_grid'
+        self.debug_info['terrain_grid_shape'] = {'original': original_shape, 'used': (n_rows, n_cols), 'stride': stride}
+        print(
+            f"  Terrain volume built from terrain grid: tag={volume_tag}, "
+            f"shape={n_rows}x{n_cols}, z=[{z_bottom:.1f}, {zmax_topo:.1f}]"
+        )
+
+    def _estimate_surface_z_from_grid(self, x, y):
+        if self.terrain_grid is None:
+            return self.bounds[5]
+
+        x_grid, y_grid, z_grid = self.terrain_grid
+        x_grid = np.asarray(x_grid, dtype=float)
+        y_grid = np.asarray(y_grid, dtype=float)
+        x_axis = np.asarray(x_grid[0, :], dtype=float)
+        y_axis = np.asarray(y_grid[:, 0], dtype=float)
+        z_grid = np.asarray(z_grid, dtype=float)
+        if z_grid.ndim != 2:
+            return self.bounds[5]
+        if x_grid.ndim == 1 and x_grid.size == z_grid.size:
+            x_grid = x_grid.reshape(z_grid.shape)
+        if y_grid.ndim == 1 and y_grid.size == z_grid.size:
+            y_grid = y_grid.reshape(z_grid.shape)
+        if x_grid.ndim != 2 or y_grid.ndim != 2:
+            return self.bounds[5]
+        x_axis = np.asarray(x_grid[0, :], dtype=float)
+        y_axis = np.asarray(y_grid[:, 0], dtype=float)
+
+        col = int(np.argmin(np.abs(x_axis - float(x))))
+        row = int(np.argmin(np.abs(y_axis - float(y))))
+        return float(z_grid[row, col])
 
     def run(self, output_dir):
         """
@@ -110,6 +279,14 @@ class GmshMesher:
         finally:
             gmsh.finalize()
 
+    def _remove_occ_duplicates(self, stage_name):
+        try:
+            gmsh.model.occ.removeAllDuplicates()
+            gmsh.model.occ.synchronize()
+            print(f"  OCC duplicates removed after {stage_name}.")
+        except Exception as e:
+            print(f"  [Warning] OCC duplicate cleanup failed after {stage_name}: {e}")
+
     def build_terrain_volume(self):
         """
         从地形 STL 构建封闭地质体体积。
@@ -123,6 +300,13 @@ class GmshMesher:
         备选策略（更稳健）：直接构建 box 作为地质体，
         后续在 FLAC3D 中用 from-topography 处理顶面。
         """
+        if self.terrain_grid is not None:
+            try:
+                self._build_terrain_volume_from_grid()
+                return
+            except Exception as e:
+                print(f"  [Warning] Terrain grid volume build failed ({e}), falling back to box terrain volume.")
+
         xmin, xmax, ymin, ymax, zmin_topo, zmax_topo = self.bounds
         bot_offset = 10.0  # 与 config.MODEL_BOT_OFFSET 一致
 
@@ -195,6 +379,7 @@ class GmshMesher:
 
         gmsh.model.occ.synchronize()
         self._terrain_volumes = [(3, box_tag)]
+        self.debug_info['terrain_volume_mode'] = 'box'
         print(f"  Terrain volume: tag={box_tag}, "
               f"z=[{z_bottom:.1f}, {zmax_topo:.1f}]")
 
@@ -211,12 +396,7 @@ class GmshMesher:
                 tag = gmsh.model.occ.addBox(ox, oy, oz, dx, dy, dz)
 
             elif ptype == 'cylinder':
-                cx, cy, cz = prim['center']
-                radius = prim['radius']
-                height = prim['height']
-                # Gmsh addCylinder: (x, y, z, dx, dy, dz, r)
-                # z 方向挤出
-                tag = gmsh.model.occ.addCylinder(cx, cy, cz, 0, 0, height, radius)
+                tag = self._build_cylinder_prism(prim)
 
             elif ptype == 'polyline_extrude':
                 tag = self._build_polyline_extrude(prim)
@@ -228,6 +408,28 @@ class GmshMesher:
                 print(f"  [Warning] Failed to create {ptype}: {prim_id}")
 
         gmsh.model.occ.synchronize()
+        self._remove_occ_duplicates("build_structure_solids")
+
+    def _build_cylinder_prism(self, prim):
+        """
+        使用正多边形柱体近似圆柱，避免 OCC 解析圆柱面在 cut/mesh 后
+        产生重复 facet 的问题。
+        """
+        cx, cy, cz = prim['center']
+        radius = prim['radius']
+        height = prim['height']
+        profile = []
+        for i in range(self.cylinder_sides):
+            angle = 2.0 * np.pi * float(i) / float(self.cylinder_sides)
+            profile.append([
+                cx + radius * np.cos(angle),
+                cy + radius * np.sin(angle),
+            ])
+        return self._build_polyline_extrude({
+            'profile': profile,
+            'z0': cz,
+            'height': height,
+        })
 
     def _build_polyline_extrude(self, prim):
         """构建多边形挤出体。"""
@@ -348,8 +550,9 @@ class GmshMesher:
 
     def fragment_all(self):
         """
-        对地质体和结构体执行 OCC fragment 操作。
-        fragment 将所有体积在交界面处分割，产生共形网格。
+        对地质体和结构体执行 OCC 布尔操作。
+        当前 Path B 主要面向嵌入式实体（如 pile），优先使用 cut 保留结构体，
+        再让地质体形成带孔体积；这通常比 fragment 更稳。
         """
         if not self._terrain_volumes or not self._structure_volumes:
             print("  [Warning] No terrain or structure volumes to fragment.")
@@ -362,33 +565,35 @@ class GmshMesher:
         all_objects = self._terrain_volumes
         all_tools = self._structure_volumes
 
-        result, result_map = gmsh.model.occ.fragment(
+        result, _ = gmsh.model.occ.cut(
             all_objects, all_tools,
-            removeObject=True, removeTool=True
+            removeObject=True, removeTool=False
         )
 
         gmsh.model.occ.synchronize()
-
-        # 解析 fragment 结果：result_map[i] 对应输入 (objects + tools)[i] 的子体积
-        # objects 在前，tools 在后
-        n_objects = len(all_objects)
-
-        # 标记各体积的来源
         self._fragment_map = {}
-        for i, sub_volumes in enumerate(result_map):
-            if i < n_objects:
-                source = 'terrain'
-            else:
-                source = 'structure'
-            for dtag in sub_volumes:
-                if dtag[0] == 3:  # 只处理体积
-                    self._fragment_map[dtag] = source
+
+        terrain_volumes = [dtag for dtag in result if dtag[0] == 3]
+        for dtag in terrain_volumes:
+            self._fragment_map[dtag] = 'terrain'
+
+        existing_structure_volumes = []
+        for dtag in all_tools:
+            try:
+                gmsh.model.occ.getBoundingBox(dtag[0], dtag[1])
+                existing_structure_volumes.append(dtag)
+            except Exception:
+                pass
+
+        for dtag in existing_structure_volumes:
+            self._fragment_map[dtag] = 'structure'
 
         # fragment 后，结构体占据的空间已从地质体中"扣除"
         # 结构体区域标记为 'structure'，剩余地质体区域标记为 'terrain'
         n_terrain = sum(1 for v in self._fragment_map.values() if v == 'terrain')
         n_struct = sum(1 for v in self._fragment_map.values() if v == 'structure')
-        print(f"  Fragment result: {n_terrain} terrain + {n_struct} structure volumes")
+        self.debug_info['fragment_counts'] = {'terrain': n_terrain, 'structure': n_struct}
+        print(f"  Boolean cut result: {n_terrain} terrain + {n_struct} structure volumes")
 
     def assign_groups(self):
         """
@@ -403,6 +608,7 @@ class GmshMesher:
         if struct_tags:
             pg = gmsh.model.addPhysicalGroup(3, [t[1] for t in struct_tags], group_id)
             gmsh.model.setPhysicalName(3, pg, 'concrete')
+            self.debug_info['physical_groups']['concrete'] = len(struct_tags)
             group_id += 1
             print(f"  Physical group 'concrete': {len(struct_tags)} volumes")
 
@@ -416,6 +622,7 @@ class GmshMesher:
             # 无分层配置，全部归为一个 group
             pg = gmsh.model.addPhysicalGroup(3, [t[1] for t in terrain_tags], group_id)
             gmsh.model.setPhysicalName(3, pg, 'soil')
+            self.debug_info['physical_groups']['soil'] = len(terrain_tags)
             return
 
         # 计算每个体积的质心 z 坐标，根据到地形顶面的距离分层
@@ -427,8 +634,11 @@ class GmshMesher:
             try:
                 bb = gmsh.model.occ.getBoundingBox(dtag[0], dtag[1])
                 # bb = (xmin, ymin, zmin, xmax, ymax, zmax)
+                centroid_x = (bb[0] + bb[3]) / 2.0
+                centroid_y = (bb[1] + bb[4]) / 2.0
                 centroid_z = (bb[2] + bb[5]) / 2.0
-                depth = zmax_topo - centroid_z  # 到地表的深度
+                local_surface_z = self._estimate_surface_z_from_grid(centroid_x, centroid_y)
+                depth = local_surface_z - centroid_z
 
                 # 按深度判断属于哪一层
                 assigned = False
@@ -461,6 +671,7 @@ class GmshMesher:
             if vol_tags:
                 pg = gmsh.model.addPhysicalGroup(3, vol_tags, group_id)
                 gmsh.model.setPhysicalName(3, pg, layer_name)
+                self.debug_info['physical_groups'][layer_name] = len(vol_tags)
                 group_id += 1
                 print(f"  Physical group '{layer_name}': {len(vol_tags)} volumes")
 
@@ -468,24 +679,20 @@ class GmshMesher:
         """设置网格尺寸：结构附近加密，远处粗放。"""
         # 全局背景尺寸
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", self.mesh_size_terrain)
+        gmsh.option.setNumber("Mesh.CharacteristicLengthMin", min(self.mesh_size_structure, self.mesh_size_terrain))
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        self.debug_info['mesh_settings'] = {
+            'mesh_size_terrain': self.mesh_size_terrain,
+            'mesh_size_structure': self.mesh_size_structure,
+            'structure_dist_min': self.structure_dist_min,
+            'structure_dist_max': self.structure_dist_max,
+            'boundary_propagation': 0,
+        }
 
         # 结构体附近的尺寸场
         struct_tags = [dt for dt, src in self._fragment_map.items() if src == 'structure']
-
-        if struct_tags:
-            # 在结构体表面设置细密网格
-            for dtag in struct_tags:
-                # 获取体积的所有边界面
-                try:
-                    boundaries = gmsh.model.getBoundary([dtag], oriented=False)
-                    for bdim, btag in boundaries:
-                        # 获取面上所有点
-                        pts = gmsh.model.getBoundary([(bdim, btag)], oriented=False)
-                        for pdim, ptag in pts:
-                            if pdim == 0:
-                                gmsh.model.mesh.setSize([(pdim, ptag)], self.mesh_size_structure)
-                except Exception:
-                    pass
 
         # Distance field + Threshold field 实现过渡
         if struct_tags:
@@ -495,6 +702,7 @@ class GmshMesher:
                 for dtag in struct_tags:
                     boundaries = gmsh.model.getBoundary([dtag], oriented=False)
                     all_surfaces.extend([btag for bdim, btag in boundaries if bdim == 2])
+                all_surfaces = sorted(set(all_surfaces))
 
                 if all_surfaces:
                     f_dist = gmsh.model.mesh.field.add("Distance")
@@ -504,9 +712,8 @@ class GmshMesher:
                     gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
                     gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", self.mesh_size_structure)
                     gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", self.mesh_size_terrain)
-                    gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", 0)
-                    gmsh.model.mesh.field.setNumber(f_thresh, "DistMax",
-                                                     self.mesh_size_terrain * 3)
+                    gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", self.structure_dist_min)
+                    gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", self.structure_dist_max)
 
                     gmsh.model.mesh.field.setAsBackgroundMesh(f_thresh)
             except Exception as e:
@@ -516,7 +723,7 @@ class GmshMesher:
         # Algorithm 值 (1=MeshAdapt, 5=Delaunay, 6=Frontal-Delaunay) 用于 2D
         # Algorithm3D 值 (1=Delaunay, 4=Frontal, 7=MMG3D, 10=HXT) 用于 3D
         gmsh.option.setNumber("Mesh.Algorithm", self.mesh_algorithm)
-        gmsh.option.setNumber("Mesh.Algorithm3D", 1)  # Delaunay for 3D
+        gmsh.option.setNumber("Mesh.Algorithm3D", 10)  # HXT tends to be more robust for fragmented tet meshes
 
     def generate_mesh(self):
         """生成 3D 四面体网格。"""
@@ -527,11 +734,63 @@ class GmshMesher:
 
         # 提取网格数据
         self._extract_mesh_data()
+        self._reassign_terrain_element_groups()
 
         # 统计
         n_nodes = len(self.node_ids) if self.node_ids is not None else 0
         n_elements = len(self.element_ids) if self.element_ids is not None else 0
         print(f"  Mesh: {n_nodes} nodes, {n_elements} tetrahedra")
+
+    def _reassign_terrain_element_groups(self):
+        """
+        Path B 只有一个 terrain volume 时，physical group 无法表达多层地层。
+        因此在提取到 tetra 后，按单元质心相对局部地表高程的深度重新分层。
+        """
+        if (
+            self.element_groups is None or len(self.element_groups) == 0 or
+            self.elements is None or len(self.elements) == 0 or
+            not self.layers_config
+        ):
+            return
+
+        node_index_map = {int(nid): idx for idx, nid in enumerate(self.node_ids)}
+        updated_groups = self.element_groups.copy()
+        struct_group_names = {"concrete"}
+        terrain_mask = np.array([grp not in struct_group_names for grp in updated_groups], dtype=bool)
+
+        if not np.any(terrain_mask):
+            return
+
+        for elem_idx in np.where(terrain_mask)[0]:
+            conn = self.elements[elem_idx]
+            try:
+                pts = np.array([self.nodes[node_index_map[int(nid)]] for nid in conn], dtype=float)
+            except KeyError:
+                continue
+
+            centroid = pts.mean(axis=0)
+            local_surface_z = self._estimate_surface_z_from_grid(centroid[0], centroid[1])
+            depth = local_surface_z - centroid[2]
+
+            assigned_name = self.layers_config[-1]['name']
+            acc_thickness = 0.0
+            for layer in self.layers_config:
+                thickness = layer.get('thickness')
+                if thickness is None:
+                    assigned_name = layer['name']
+                    break
+                acc_thickness += thickness
+                if depth <= acc_thickness:
+                    assigned_name = layer['name']
+                    break
+
+            updated_groups[elem_idx] = assigned_name
+
+        self.element_groups = updated_groups
+        unique_groups, counts = np.unique(self.element_groups, return_counts=True)
+        self.debug_info['physical_groups'] = {
+            str(name): int(count) for name, count in zip(unique_groups, counts)
+        }
 
     def _extract_mesh_data(self):
         """从 Gmsh 提取节点、单元和分组数据。"""
@@ -568,6 +827,10 @@ class GmshMesher:
             self.element_ids = np.concatenate(all_element_ids)
             self.elements = np.concatenate(all_element_conn)
             self.element_groups = np.array(all_element_groups, dtype=object)
+            used_node_ids = np.unique(self.elements.reshape(-1))
+            used_node_mask = np.isin(self.node_ids, used_node_ids)
+            self.node_ids = self.node_ids[used_node_mask]
+            self.nodes = self.nodes[used_node_mask]
         else:
             self.element_ids = np.array([], dtype=int)
             self.elements = np.array([], dtype=int).reshape(0, 4)

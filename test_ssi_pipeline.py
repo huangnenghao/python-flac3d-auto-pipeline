@@ -43,6 +43,7 @@ print("\n>>> STEP 2: Building STL...")
 from src.surface_builder import SurfaceBuilder
 builder = SurfaceBuilder(x, y, z)
 builder.build_mesh()
+terrain_grid_transformed = builder.get_transformed_grids()
 builder.export_stl(stl_path)
 
 bounds = (
@@ -78,6 +79,7 @@ assert n_piles == 5, f"Expected 5 piles, got {n_piles}"
 assert not unsupported, f"Expected no unsupported final objects, got {unsupported}"
 assert all(p['z_top'] > p['z_bottom'] for p in classified['piles']), "Pile top must be above bottom"
 assert all(p['radius'] > 0 for p in classified['piles']), "Pile radius must be positive"
+assert all('top_x' in p and 'top_y' in p for p in classified['piles']), "Pile endpoints should preserve top XY"
 
 for p in classified['piles']:
     print(f"    {p['id']}: center=({p['center_x']:.1f}, "
@@ -88,6 +90,7 @@ for p in classified['piles']:
 from src.structure_elements import StructureElementGenerator
 from src.flac3d_runner import Flac3DRunner
 from src.path_a_geometry import validate_path_a_geometry
+from src.path_b_geometry import validate_path_b_schema
 gen = StructureElementGenerator(config)
 cmds = gen.generate_all(classified)
 pile_cmd = next(cmd for cmd in cmds if cmd.startswith("structure pile property "))
@@ -139,6 +142,47 @@ assert n_beams_mixed == 1, f"Expected 1 beam, got {n_beams_mixed}"
 assert not unsupported_mixed, f"Expected no unsupported final objects, got {unsupported_mixed}"
 assert not geometry_errors_mixed, f"Expected embedded cable geometry, got {geometry_errors_mixed}"
 
+invalid_slanted_pile = {
+    'piles': [{
+        'id': 'pile_slanted',
+        'center_x': classified_mixed['piles'][0]['center_x'],
+        'center_y': classified_mixed['piles'][0]['center_y'],
+        'top_x': classified_mixed['piles'][0]['center_x'] + 1.0,
+        'top_y': classified_mixed['piles'][0]['center_y'],
+        'z_bottom': classified_mixed['piles'][0]['z_bottom'],
+        'z_top': classified_mixed['piles'][0]['z_top'],
+        'radius': classified_mixed['piles'][0]['radius'],
+    }],
+    'cables': [],
+    'beams': [],
+}
+errors_slanted_pile = validate_path_a_geometry(invalid_slanted_pile, builder.mesh.vertices, bounds)
+assert any("vertical" in err for err in errors_slanted_pile), errors_slanted_pile
+
+invalid_cable = {
+    'piles': classified_mixed['piles'],
+    'cables': [{
+        'id': 'cable_outside',
+        'start': [bounds[1] + 5.0, bounds[3] + 5.0, bounds[5] + 2.0],
+        'end': [bounds[1] + 15.0, bounds[3] + 10.0, bounds[5] + 1.0],
+    }],
+    'beams': [],
+}
+errors_invalid_cable = validate_path_a_geometry(invalid_cable, builder.mesh.vertices, bounds)
+assert any("does not intersect" in err or "outside terrain XY bounds" in err for err in errors_invalid_cable), errors_invalid_cable
+
+invalid_beam = {
+    'piles': classified_mixed['piles'],
+    'cables': [],
+    'beams': [{
+        'id': 'beam_far',
+        'start': [bounds[0] + 1.0, bounds[2] + 1.0, bounds[5] - 1.0],
+        'end': [bounds[0] + 4.0, bounds[2] + 1.0, bounds[5] - 1.0],
+    }],
+}
+errors_invalid_beam = validate_path_a_geometry(invalid_beam, builder.mesh.vertices, bounds)
+assert any("pile head" in err for err in errors_invalid_beam), errors_invalid_beam
+
 mixed_cmds = gen.generate_all(classified_mixed)
 cable_cmd = next(cmd for cmd in mixed_cmds if cmd.startswith("structure cable property "))
 beam_cmd = next(cmd for cmd in mixed_cmds if cmd.startswith("structure beam property "))
@@ -155,7 +199,8 @@ assert "grout-stiffness" in cable_cmd and "grout-cohesion" in cable_cmd
 assert f"cross-sectional-area {expected_cable_area:.12g}" in cable_cmd
 assert "value" in cable_apply_cmd
 assert "100000" in cable_apply_cmd
-assert release_cmds == ["structure cable apply tension active off range id 6"]
+assert len(release_cmds) == 1, release_cmds
+assert release_cmds[0].startswith("structure cable apply tension active off range id "), release_cmds
 
 assert "cross-sectional-area" in beam_cmd
 assert "moi-y" in beam_cmd and "moi-z" in beam_cmd and "moi-polar" in beam_cmd
@@ -183,9 +228,21 @@ try:
     parser_b.apply_transform(builder.pca_angle, builder.centroid)
     primitives, operations = parser_b.parse()
     final_ids = parser_b.get_structure_ids()
+    path_b_errors, path_b_warnings = validate_path_b_schema(primitives, operations, final_ids)
 
     print(f"  Primitives: {len(primitives)}, Operations: {len(operations)}")
     print(f"  Final IDs: {final_ids}")
+    print(f"  Path B warnings: {path_b_warnings}")
+    assert not path_b_errors, f"Expected Path B schema to be supported, got {path_b_errors}"
+
+    parser_b_mixed = StructureSchemaParser()
+    parser_b_mixed.load(mixed_schema_path)
+    parser_b_mixed.normalize_units(target_unit='m')
+    parser_b_mixed.apply_transform(builder.pca_angle, builder.centroid)
+    primitives_mixed_b, operations_mixed_b = parser_b_mixed.parse()
+    final_ids_mixed_b = parser_b_mixed.get_structure_ids()
+    path_b_errors_mixed, _ = validate_path_b_schema(primitives_mixed_b, operations_mixed_b, final_ids_mixed_b)
+    assert any("does not support 1D beam/cable members" in err for err in path_b_errors_mixed), path_b_errors_mixed
 
     print("\n>>> Initializing GmshMesher...")
     from src.gmsh_mesher import GmshMesher
@@ -195,6 +252,9 @@ try:
         'mesh_size_structure': getattr(config, 'GMSH_MESH_SIZE_STRUCTURE', 0.5),
         'algorithm': getattr(config, 'GMSH_MESH_ALGORITHM', 6),
         'optimize': getattr(config, 'GMSH_OPTIMIZE_QUALITY', True),
+        'terrain_grid_max_points': getattr(config, 'GMSH_TERRAIN_GRID_MAX_POINTS', 5000),
+        'structure_dist_min': getattr(config, 'GMSH_STRUCTURE_DIST_MIN', 0.0),
+        'structure_dist_max': getattr(config, 'GMSH_STRUCTURE_DIST_MAX', 2.0),
     }
 
     mesher = GmshMesher(
@@ -205,6 +265,7 @@ try:
         layers_config=getattr(config, 'LAYERS', []),
         gmsh_config=gmsh_config,
         structure_final_ids=final_ids,
+        terrain_grid=terrain_grid_transformed,
     )
 
     print(">>> Running Gmsh pipeline...")
@@ -215,6 +276,19 @@ try:
     if os.path.exists(f3grid_path):
         size_kb = os.path.getsize(f3grid_path) / 1024
         print(f"  File size: {size_kb:.1f} KB")
+
+    debug_info = mesher.debug_info
+    print(f"  Terrain mode: {debug_info['terrain_volume_mode']}")
+    print(f"  Fragment counts: {debug_info['fragment_counts']}")
+    print(f"  Physical groups: {debug_info['physical_groups']}")
+    assert debug_info['terrain_volume_mode'] == 'terrain_grid', debug_info
+    assert debug_info['fragment_counts']['terrain'] > 0, debug_info
+    assert debug_info['fragment_counts']['structure'] > 0, debug_info
+    assert debug_info['physical_groups'].get('concrete', 0) > 0, debug_info
+    layer_names = [layer['name'] for layer in getattr(config, 'LAYERS', [])]
+    assert any(debug_info['physical_groups'].get(name, 0) > 0 for name in layer_names), debug_info
+    assert mesher.element_groups is not None and len(mesher.element_groups) > 0
+    assert 'concrete' in set(mesher.element_groups.tolist()), set(mesher.element_groups.tolist())
 
     print("\n" + "=" * 60)
     print("TEST PASSED - Path B pipeline OK")

@@ -320,6 +320,8 @@ class StructureSchemaParser:
             bottom_raw, top_raw = self._get_cylinder_endpoints(prim)
             bottom = transform_fn(bottom_raw)
             top = transform_fn(top_raw)
+            prim['base_center'] = list(bottom)
+            prim['top_center'] = list(top)
             prim['center'] = bottom
             prim['height'] = top[2] - bottom[2]
             prim['center_mode'] = 'base'
@@ -436,6 +438,8 @@ class StructureSchemaParser:
                     'type': 'pile',
                     'center_x': bottom[0],
                     'center_y': bottom[1],
+                    'top_x': top[0],
+                    'top_y': top[1],
                     'z_bottom': bottom[2],
                     'z_top': top[2],
                     'radius': prim['radius'],

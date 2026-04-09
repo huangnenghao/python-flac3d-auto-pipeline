@@ -263,6 +263,7 @@ def main(argv=None):
         builder = SurfaceBuilder(x, y, z)
         builder.build_mesh()
         builder.export_stl(output_stl_path)
+        terrain_grid_transformed = builder.get_transformed_grids()
 
         if builder.mesh is None:
             raise ValueError("Mesh generation failed, builder.mesh is None")
@@ -354,18 +355,27 @@ def main(argv=None):
 
             elif ssi_path == 'B':
                 from src.gmsh_mesher import GmshMesher
+                from src.path_b_geometry import validate_path_b_schema
 
                 gmsh_config = {
                     'mesh_size_terrain': getattr(config, 'GMSH_MESH_SIZE_TERRAIN', 2.0),
                     'mesh_size_structure': getattr(config, 'GMSH_MESH_SIZE_STRUCTURE', 0.5),
                     'algorithm': getattr(config, 'GMSH_MESH_ALGORITHM', 6),
                     'optimize': getattr(config, 'GMSH_OPTIMIZE_QUALITY', True),
+                    'terrain_grid_max_points': getattr(config, 'GMSH_TERRAIN_GRID_MAX_POINTS', 5000),
+                    'structure_dist_min': getattr(config, 'GMSH_STRUCTURE_DIST_MIN', 0.0),
+                    'structure_dist_max': getattr(config, 'GMSH_STRUCTURE_DIST_MAX', 2.0),
                 }
 
                 primitives, operations = parser.parse()
                 final_ids = parser.get_structure_ids()
+                path_b_errors, path_b_warnings = validate_path_b_schema(primitives, operations, final_ids)
 
                 print(f"  [Path B] Gmsh solid modeling: {len(primitives)} primitives, {len(operations)} operations")
+                for warning in path_b_warnings:
+                    print(f"  [Path B] Warning: {warning}")
+                if path_b_errors:
+                    raise ValueError("\n".join(path_b_errors))
 
                 mesher = GmshMesher(
                     stl_path=output_stl_path,
@@ -375,6 +385,7 @@ def main(argv=None):
                     layers_config=getattr(config, 'LAYERS', []),
                     gmsh_config=gmsh_config,
                     structure_final_ids=final_ids,
+                    terrain_grid=terrain_grid_transformed,
                 )
 
                 mesh_import_path = mesher.run(output_dir)

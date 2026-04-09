@@ -20,7 +20,7 @@ def get_project_dirs(project_name=PROJECT_NAME):
 FLAC3D_CONSOLE_PATH = r"C:\Program Files\Itasca\FLAC3D700\exe64\flac3d700_console.exe"
 
 # TIF 处理配置
-DOWNSAMPLE_FACTOR = 1  # 降采样因子
+DOWNSAMPLE_FACTOR = 2  # 降采样因子（Path B 多桩试验先保持较低复杂度）
 Z_SCALE = 1.0          # 高程缩放
 
 # STL 输出文件名
@@ -29,7 +29,7 @@ STL_FILENAME = 'terrain_surface.stl'
 # FLAC3D 网格配置
 MESH_RES_X = 4     # FLAC3D 初始网格 X 方向尺寸
 MESH_RES_Y = 4     # FLAC3D 初始网格 Y 方向尺寸
-MESH_RES_Z = 2    # FLAC3D 初始网格 Z 方向尺寸
+MESH_RES_Z = 4    # FLAC3D 初始网格 Z 方向尺寸
 MODEL_BOT_OFFSET = 10.0 # 初始大六面体底部低于地形最低点的距离 (建议足够深以容纳所有地层)
 
 # 地层结构定义 (从上往下)
@@ -81,7 +81,7 @@ SOLVE_FOS_RATIO = 1e-4
 # ============================================================
 # 随机场 & 可靠度分析参数 (Monte Carlo)
 # ============================================================
-RF_ENABLED = True     # 是否在 FOS 计算后自动执行可靠度分析
+RF_ENABLED = False     # 是否在 FOS 计算后自动执行可靠度分析
 RF_NSIM    = 100       # Monte Carlo 模拟次数
 RF_ACF     = 1         # 自相关函数类型:
                        #   1 = 单指数 (Single Exponential)
@@ -94,13 +94,14 @@ RF_RXY     = -0.5      # c 与 phi 之间的互相关系数 (负值表示负相�
 # ============================================================
 # 结构-地层相互作用 (SSI) 配置
 # ============================================================
-SSI_ENABLED = False        # 是否启用结构体建模
+SSI_ENABLED = True        # 是否启用结构体建模
 SSI_PATH = 'A'              # 'A' = FLAC3D structure 元素, 'B' = Gmsh 实体 zone
-SSI_SCHEMA_PATH = None      # LLM 生成的结构 schema 文件路径 (.json 或 .py)
+SSI_SCHEMA_PATH = r"d:\2026.03 FLAC3D Code-Native\data\test-pathA\input\structure_schema.json"      
+                            # LLM 生成的结构 schema 文件路径 (.json 或 .py)
                             # 若为 None，则在项目 input 目录查找 structure_schema.json
 SSI_STRICT = True
-MAIN_TIF_PATH = r"d:\2026.03 FLAC3D Code-Native\data\longrong3_after_treatment\input\DEM.tif"
-MAIN_PROJECT_NAME = "longrong3_after_treatment_relia_100sim"
+MAIN_TIF_PATH = r"d:\2026.03 FLAC3D Code-Native\data\test-pathA\input\DEM.tif"
+MAIN_PROJECT_NAME = "test-pathA"
 MAIN_NON_INTERACTIVE = False
 MAIN_AUTO_START_RELIABILITY = None
 EXPORT_CONFIG_MARKDOWN = True
@@ -139,10 +140,13 @@ STRUCTURE_ELEMENTS = {
 }
 
 # --- Path B: Gmsh 网格参数 ---
-GMSH_MESH_SIZE_TERRAIN = 2.0     # m, 地质体网格尺寸
-GMSH_MESH_SIZE_STRUCTURE = 0.5   # m, 结构体附近网格尺寸
+GMSH_MESH_SIZE_TERRAIN = 4.0     # m, 地质体网格尺寸（多桩恢复阶段先调粗）
+GMSH_MESH_SIZE_STRUCTURE = 3.0   # m, 结构体附近最小网格尺寸
 GMSH_MESH_ALGORITHM = 6          # 1=MeshAdapt, 6=Frontal-Delaunay (推荐)
-GMSH_OPTIMIZE_QUALITY = True     # 网格优化
+GMSH_OPTIMIZE_QUALITY = False    # 多桩恢复阶段先关闭优化以缩短耗时
+GMSH_STRUCTURE_DIST_MIN = 0.0    # m, 结构表面附近保持最细网格的距离
+GMSH_STRUCTURE_DIST_MAX = 1.0    # m, 从结构表面过渡回地质体尺寸的影响范围
+GMSH_TERRAIN_GRID_MAX_POINTS = 2000  # Path B 构造 terrain solid 时允许的最大高程点数
 
 # --- 结构体材料参数 (两种路径通用) ---
 STRUCTURE_MAT_PROPS = {
