@@ -26,6 +26,9 @@ errorlog.*
 flac3d_log.txt
 plot.dat
 monitor*.png
+*strain*.png
+*strain*.jpg
+*strain*.jpeg
 
 # Generated pipeline scripts / reports
 run_analysis.dat
